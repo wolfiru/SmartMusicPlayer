@@ -1,7 +1,7 @@
 [
   {
     "id": 1,
-    "name": "Driving",
+    "name": "Autofahren",
     "tempo": 65,
     "energy": 70,
     "brightness": 60,
@@ -9,7 +9,7 @@
   },
   {
     "id": 2,
-    "name": "Sleeping",
+    "name": "Schlafen",
     "tempo": 20,
     "energy": 15,
     "brightness": 20,
@@ -17,7 +17,7 @@
   },
   {
     "id": 3,
-    "name": "Workout",
+    "name": "Sport",
     "tempo": 85,
     "energy": 90,
     "brightness": 70,
@@ -25,7 +25,7 @@
   },
   {
     "id": 4,
-    "name": "Background Music",
+    "name": "Hintergrundmusik",
     "tempo": 40,
     "energy": 35,
     "brightness": 30,
@@ -33,7 +33,7 @@
   },
   {
     "id": 5,
-    "name": "Dynamic",
+    "name": "Dynamisch",
     "tempo": 80,
     "energy": 75,
     "brightness": 75,
@@ -41,7 +41,7 @@
   },
   {
     "id": 6,
-    "name": "Relax",
+    "name": "Entspannen",
     "tempo": 35,
     "energy": 25,
     "brightness": 40,
@@ -57,7 +57,7 @@
   },
   {
     "id": 8,
-    "name": "Focus",
+    "name": "Konzentrieren",
     "tempo": 30,
     "energy": 20,
     "brightness": 25,
@@ -65,7 +65,7 @@
   },
   {
     "id": 9,
-    "name": "Mood Booster",
+    "name": "Stimmung heben",
     "tempo": 70,
     "energy": 80,
     "brightness": 85,
@@ -81,7 +81,7 @@
   },
   {
     "id": 11,
-    "name": "Highway",
+    "name": "Autobahn",
     "tempo": 88,
     "energy": 85,
     "brightness": 65,

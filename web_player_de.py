@@ -16,7 +16,7 @@ except ImportError:
     HAVE_VLC = False
     vlc = None
 
-# Cover extractor
+# Cover-Extractor
 try:
     from mutagen.mp3 import MP3
     from mutagen.id3 import ID3, APIC
@@ -24,18 +24,18 @@ try:
 except ImportError:
     HAVE_MUTAGEN = False
 
-# Image processing for cover colors
+# Bildverarbeitung für Cover-Farben
 try:
     from PIL import Image
     HAVE_PIL = True
 except ImportError:
     HAVE_PIL = False
 
-# ==== CONFIGURATION ====
-MUSIC_DIR = r"M:\Favoriten (Spotify)"  # fixed path
+# ==== KONFIGURATION ====
+MUSIC_DIR = r"M:\Favoriten (Spotify)"  # fixer Pfad
 CSV_PATH = os.path.join(MUSIC_DIR, "song_features_with_clusters.csv")
 
-# presets.json in the same folder as this script
+# presets.json im selben Ordner wie dieses Script
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 PRESET_PATH = os.path.join(BASE_DIR, "presets.json")
 # =======================
@@ -43,23 +43,23 @@ PRESET_PATH = os.path.join(BASE_DIR, "presets.json")
 
 def tempo_category(bpm):
     if pd.isna(bpm):
-        return "unknown"
+        return "unbekannt"
     if bpm < 90:
-        return "slow"
+        return "langsam"
     elif bpm < 120:
-        return "medium"
+        return "mittel"
     else:
-        return "fast"
+        return "schnell"
 
 
 class WebMusicPlayer:
     """
-    Web-controlled player:
-    - Local: VLC plays on the server
-    - Remote: Browser streams via /api/stream/<idx>
-    - Intelligent next-track choice
-    - Presets (mood / mode) from presets.json
-    - Theme colors extracted from cover images
+    Web-gesteuerter Player:
+    - Local: VLC spielt am Server
+    - Remote: Browser streamt /api/stream/<idx>
+    - Intelligente nächste-Titel-Auswahl
+    - Presets (Stimmung / Mode) aus presets.json
+    - Theme-Farben aus dem Cover
     """
 
     def __init__(self, music_dir, csv_path):
@@ -67,11 +67,11 @@ class WebMusicPlayer:
         self.csv_path = csv_path
 
         if not os.path.exists(csv_path):
-            raise FileNotFoundError(f"CSV not found: {csv_path}")
+            raise FileNotFoundError(f"CSV nicht gefunden: {csv_path}")
 
         df = pd.read_csv(csv_path)
         if "cluster_id" not in df.columns:
-            raise ValueError("CSV has no column 'cluster_id'.")
+            raise ValueError("CSV hat keine Spalte 'cluster_id'.")
 
         df["cluster_id"] = df["cluster_id"].astype(int)
 
@@ -79,7 +79,7 @@ class WebMusicPlayer:
             tempo_category
         )
 
-        # Energy / brightness categories
+        # Energie / Helligkeit-Kategorien
         if "rms_mean" in df.columns:
             q_low, q_high = df["rms_mean"].quantile([0.33, 0.66])
             energy_low, energy_high = q_low, q_high
@@ -94,23 +94,23 @@ class WebMusicPlayer:
 
         def energy_cat(val):
             if pd.isna(val) or energy_low is None:
-                return "unknown"
+                return "unbekannt"
             if val < energy_low:
-                return "calm"
+                return "ruhig"
             elif val < energy_high:
                 return "normal"
             else:
-                return "powerful"
+                return "druckvoll"
 
         def bright_cat(val):
             if pd.isna(val) or bright_low is None:
-                return "unknown"
+                return "unbekannt"
             if val < bright_low:
-                return "dark"
+                return "dunkel"
             elif val < bright_high:
                 return "neutral"
             else:
-                return "bright"
+                return "hell"
 
         df["energy_cat"] = df.get("rms_mean", pd.Series([None] * len(df))).apply(
             energy_cat
@@ -122,7 +122,7 @@ class WebMusicPlayer:
         self.df = df.reset_index(drop=True)
         self.n_songs = len(self.df)
 
-        # Features for similarity
+        # Features für allgemeine Ähnlichkeit
         self.feature_cols = [
             c
             for c in self.df.columns
@@ -153,7 +153,7 @@ class WebMusicPlayer:
             self.X_norm = None
             self.weights = None
 
-        # Features for presets (Tempo/Energy/Brightness)
+        # Features für Presets (Tempo/Energy/Brightness)
         self.preset_cols = ["tempo", "rms_mean", "spec_centroid_mean"]
         if all(c in self.df.columns for c in self.preset_cols):
             preset_mat = self.df[self.preset_cols].copy()
@@ -173,13 +173,13 @@ class WebMusicPlayer:
             self.preset_std = None
             self.preset_X_norm = None
 
-        # Playback state
+        # Playback-State
         self.current_idx = None
         self.prev_idx = None
         self.played = set()
 
-        # Mode
-        self.playback_mode = "local"  # "local" or "remote"
+        # Modus
+        self.playback_mode = "local"  # "local" oder "remote"
 
         # Presets
         self.presets = []
@@ -187,215 +187,7 @@ class WebMusicPlayer:
         self.active_preset_id = None
         self._load_presets()
 
-        # Cover + theme colors
-        self.cover_cache = {}       # song_idx -> (mime, data)
-        self.theme_color_cache = {} # song_idx -> "#rrggbb"
-
-        # VLC
-        if HAVE_VLC:
-            self.vlc_instance = vlc.Instance()
-            self.vlc_player = self.vlc_instance.media_player_new()
-        else:
-            self.vlc_instance = None
-            self.vlc_player = None
-
-        self.last_vlc_state = None
-        self.lock = threading.Lock()
-
-        # Autoplay thread (local only)
-        t = threading.Thread(target=self._autoadvance_loop, daemon=True)
-        t.start()
-
-import os
-import threading
-import time
-import json
-from io import BytesIO
-
-import numpy as np
-import pandas as pd
-from flask import Flask, jsonify, request, send_file, Response, abort
-
-# VLC
-try:
-    import vlc
-    HAVE_VLC = True
-except ImportError:
-    HAVE_VLC = False
-    vlc = None
-
-# Cover extractor
-try:
-    from mutagen.mp3 import MP3
-    from mutagen.id3 import ID3, APIC
-    HAVE_MUTAGEN = True
-except ImportError:
-    HAVE_MUTAGEN = False
-
-# Image processing for cover colors
-try:
-    from PIL import Image
-    HAVE_PIL = True
-except ImportError:
-    HAVE_PIL = False
-
-# ==== CONFIGURATION ====
-MUSIC_DIR = r"M:\Favoriten (Spotify)"  # fixed path
-CSV_PATH = os.path.join(MUSIC_DIR, "song_features_with_clusters.csv")
-
-# presets.json in the same folder as this script
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-PRESET_PATH = os.path.join(BASE_DIR, "presets.json")
-# =======================
-
-
-def tempo_category(bpm):
-    if pd.isna(bpm):
-        return "unknown"
-    if bpm < 90:
-        return "slow"
-    elif bpm < 120:
-        return "medium"
-    else:
-        return "fast"
-
-
-class WebMusicPlayer:
-    """
-    Web-controlled player:
-    - Local: VLC plays on the server
-    - Remote: browser streams /api/stream/<idx>
-    - Intelligent next-track selection
-    - Presets (mood / mode) from presets.json
-    - Theme colors from the cover
-    """
-
-    def __init__(self, music_dir, csv_path):
-        self.music_dir = music_dir
-        self.csv_path = csv_path
-
-        if not os.path.exists(csv_path):
-            raise FileNotFoundError(f"CSV not found: {csv_path}")
-
-        df = pd.read_csv(csv_path)
-        if "cluster_id" not in df.columns:
-            raise ValueError("CSV has no column 'cluster_id'.")
-
-        df["cluster_id"] = df["cluster_id"].astype(int)
-
-        df["tempo_cat"] = df.get("tempo", pd.Series([None] * len(df))).apply(
-            tempo_category
-        )
-
-        # Energy / brightness categories
-        if "rms_mean" in df.columns:
-            q_low, q_high = df["rms_mean"].quantile([0.33, 0.66])
-            energy_low, energy_high = q_low, q_high
-        else:
-            energy_low = energy_high = None
-
-        if "spec_centroid_mean" in df.columns:
-            q_low_b, q_high_b = df["spec_centroid_mean"].quantile([0.33, 0.66])
-            bright_low, bright_high = q_low_b, q_high_b
-        else:
-            bright_low = bright_high = None
-
-        def energy_cat(val):
-            if pd.isna(val) or energy_low is None:
-                return "unknown"
-            if val < energy_low:
-                return "calm"
-            elif val < energy_high:
-                return "normal"
-            else:
-                return "powerful"
-
-        def bright_cat(val):
-            if pd.isna(val) or bright_low is None:
-                return "unknown"
-            if val < bright_low:
-                return "dark"
-            elif val < bright_high:
-                return "neutral"
-            else:
-                return "bright"
-
-        df["energy_cat"] = df.get("rms_mean", pd.Series([None] * len(df))).apply(
-            energy_cat
-        )
-        df["bright_cat"] = df.get("spec_centroid_mean", pd.Series([None] * len(df))).apply(
-            bright_cat
-        )
-
-        self.df = df.reset_index(drop=True)
-        self.n_songs = len(self.df)
-
-        # Features for general similarity
-        self.feature_cols = [
-            c
-            for c in self.df.columns
-            if c in ("tempo", "rms_mean", "spec_centroid_mean") or c.startswith("mfcc_")
-        ]
-        if self.feature_cols:
-            feat_mat = self.df[self.feature_cols].copy()
-            feat_mat = feat_mat.fillna(feat_mat.mean())
-            self.feature_mean = feat_mat.mean(axis=0).values
-            self.feature_std = feat_mat.std(axis=0).values
-            self.feature_std[self.feature_std == 0] = 1.0
-            self.X_norm = (feat_mat.values - self.feature_mean) / self.feature_std
-
-            weights = []
-            for col in self.feature_cols:
-                if col == "tempo":
-                    weights.append(2.0)
-                elif col == "rms_mean":
-                    weights.append(2.0)
-                elif col == "spec_centroid_mean":
-                    weights.append(1.0)
-                elif col.startswith("mfcc_"):
-                    weights.append(0.3)
-                else:
-                    weights.append(1.0)
-            self.weights = np.array(weights)
-        else:
-            self.X_norm = None
-            self.weights = None
-
-        # Features for presets (tempo/energy/brightness)
-        self.preset_cols = ["tempo", "rms_mean", "spec_centroid_mean"]
-        if all(c in self.df.columns for c in self.preset_cols):
-            preset_mat = self.df[self.preset_cols].copy()
-            preset_mat = preset_mat.fillna(preset_mat.mean())
-            self.preset_df = preset_mat
-            self.preset_min = preset_mat.min()
-            self.preset_max = preset_mat.max()
-            self.preset_mean = preset_mat.mean()
-            self.preset_std = preset_mat.std()
-            self.preset_std[self.preset_std == 0] = 1.0
-            self.preset_X_norm = (preset_mat - self.preset_mean) / self.preset_std
-        else:
-            self.preset_df = None
-            self.preset_min = None
-            self.preset_max = None
-            self.preset_mean = None
-            self.preset_std = None
-            self.preset_X_norm = None
-
-        # Playback state
-        self.current_idx = None
-        self.prev_idx = None
-        self.played = set()
-
-        # Mode
-        self.playback_mode = "local"  # "local" or "remote"
-
-        # Presets
-        self.presets = []
-        self.presets_by_id = {}
-        self.active_preset_id = None
-        self._load_presets()
-
-        # Cover + theme colors
+        # Cover + Theme-Farben
         self.cover_cache = {}         # song_idx -> (mime, data)
         self.theme_color_cache = {}   # song_idx -> "#rrggbb"
 
@@ -411,7 +203,7 @@ class WebMusicPlayer:
 
         self.lock = threading.Lock()
 
-        # Autoplay thread (only relevant for local)
+        # Autoplay-Thread (nur für local relevant)
         t = threading.Thread(target=self._autoadvance_loop, daemon=True)
         t.start()
 
@@ -419,7 +211,7 @@ class WebMusicPlayer:
 
     def _load_presets(self):
         if not os.path.exists(PRESET_PATH):
-            print(f"[WARN] presets.json not found at {PRESET_PATH}")
+            print(f"[WARN] presets.json nicht gefunden unter {PRESET_PATH}")
             return
         try:
             with open(PRESET_PATH, "r", encoding="utf-8") as f:
@@ -429,17 +221,17 @@ class WebMusicPlayer:
             for p in presets:
                 pid = int(p.get("id"))
                 self.presets_by_id[pid] = p
-            print(f"[INFO] {len(self.presets)} presets loaded.")
+            print(f"[INFO] {len(self.presets)} Presets geladen.")
         except Exception as e:
-            print(f"[ERROR] Could not load presets.json: {e}")
+            print(f"[ERROR] Konnte presets.json nicht laden: {e}")
             self.presets = []
             self.presets_by_id = {}
 
     def activate_preset_and_play(self, preset_id):
         """
-        Activate preset:
-        - If different preset: activate + play a matching track
-        - If same preset: deactivate, no auto-start
+        Preset aktivieren:
+        - Wenn anderer Preset: aktivieren + passendes Lied spielen
+        - Wenn gleicher Preset: deaktivieren, kein Autostart
         """
         try:
             preset_id = int(preset_id)
@@ -454,20 +246,17 @@ class WebMusicPlayer:
             if self.active_preset_id == preset_id:
                 # toggle off
                 self.active_preset_id = None
-                print("[INFO] Preset deactivated.")
+                print("[INFO] Preset deaktiviert.")
                 return None, False
 
             self.active_preset_id = preset_id
-            print(
-                f"[INFO] Preset activated: "
-                f"{self.presets_by_id[preset_id].get('name')} (id={preset_id})"
-            )
+            print(f"[INFO] Preset aktiviert: {self.presets_by_id[preset_id].get('name')} (id={preset_id})")
 
-        # outside the lock: start next track (preset logic is used in next_song)
+        # außerhalb des Locks: nächstes Lied starten (Preset-Logik wird in next_song berücksichtigt)
         idx = self.next_song(big_jump=False)
         return idx, True
 
-    # ---------- Helper ----------
+    # ---------- Hilfen ----------
 
     def _resolve_path(self, path: str) -> str:
         if not os.path.isabs(path):
@@ -478,14 +267,14 @@ class WebMusicPlayer:
         with self.lock:
             if mode in ("local", "remote"):
                 self.playback_mode = mode
-                print(f"[INFO] Playback mode changed to: {mode}")
+                print(f"[INFO] Playback-Mode geändert auf: {mode}")
             else:
-                print(f"[WARN] Invalid mode: {mode}")
+                print(f"[WARN] Ungültiger Mode: {mode}")
 
-    # ---------- Similarity logic ----------
+    # ---------- Ähnlichkeitslogik ----------
 
     def _choose_next_index_generic(self, big_jump=False):
-        """Standard similarity (without preset)."""
+        """Standard-Ähnlichkeit (ohne Preset)."""
         if self.X_norm is None or self.weights is None:
             remaining = [i for i in range(self.n_songs) if i not in self.played]
             if not remaining:
@@ -537,24 +326,20 @@ class WebMusicPlayer:
 
     def _choose_next_index_preset(self):
         """
-        Choose next track based on active preset (tempo/energy/brightness).
-        Falls back to generic similarity if preset features are not usable.
+        Wählt nächsten Song anhand des aktiven Presets (Tempo/Energie/Brightness).
+        Fällt zurück auf Generic, wenn Preset-Features nicht nutzbar sind.
         """
         if self.active_preset_id is None:
             return None
 
-        if (
-            self.preset_X_norm is None
-            or self.preset_min is None
-            or self.preset_max is None
-        ):
+        if self.preset_X_norm is None or self.preset_min is None or self.preset_max is None:
             return None
 
         preset = self.presets_by_id.get(self.active_preset_id)
         if not preset:
             return None
 
-        # Percent values from preset
+        # Prozentwerte aus Preset
         p_tempo = float(preset.get("tempo", 50))
         p_energy = float(preset.get("energy", 50))
         p_bright = float(preset.get("brightness", 50))
@@ -573,7 +358,7 @@ class WebMusicPlayer:
             "spec_centroid_mean": map_percent("spec_centroid_mean", p_bright),
         }
 
-        # transform to same normalized space as preset_X_norm
+        # in denselben Norm-Raum bringen wie preset_X_norm
         target_norm = []
         for col in self.preset_cols:
             mean = self.preset_mean[col]
@@ -582,7 +367,7 @@ class WebMusicPlayer:
             target_norm.append((val - mean) / std)
         target_norm = np.array(target_norm)
 
-        # candidates: first non-played, otherwise all
+        # Kandidaten: zuerst nicht-gespielte, sonst alle
         all_indices = list(range(self.n_songs))
         remaining = [i for i in all_indices if i not in self.played]
         if not remaining:
@@ -591,7 +376,7 @@ class WebMusicPlayer:
 
         X_rem = self.preset_X_norm.iloc[remaining].values
         diffs = X_rem - target_norm
-        d2 = np.sum(diffs ** 2, axis=1)  # equal weighting for tempo/energy/brightness
+        d2 = np.sum(diffs ** 2, axis=1)  # gleiche Gewichtung für Tempo/Energy/Bright
         d = np.sqrt(d2)
 
         order = np.argsort(d)
@@ -601,7 +386,7 @@ class WebMusicPlayer:
         if n == 0:
             return None
 
-        # top candidates around the target
+        # Top-Kandidaten um das Ziel herum
         k = min(30, max(5, n // 3))
         cand = list(range(k))
 
@@ -613,10 +398,10 @@ class WebMusicPlayer:
 
     def next_song(self, big_jump=False):
         """
-        Local: start VLC
-        Remote: only set index, browser streams
-        - If preset active: preset-based selection
-        - Otherwise: generic similarity logic
+        Local: VLC starten
+        Remote: nur Index setzen, Browser streamt
+        - Wenn Preset aktiv: preset-basierte Auswahl
+        - Sonst: generische Ähnlichkeitslogik
         """
         with self.lock:
             attempts = 0
@@ -626,7 +411,7 @@ class WebMusicPlayer:
                 if self.active_preset_id is not None:
                     idx = self._choose_next_index_preset()
                     if idx is None:
-                        # fallback if preset logic finds nothing
+                        # Fallback, falls Preset-Logik nichts findet
                         idx = self._choose_next_index_generic(big_jump=big_jump)
                 else:
                     idx = self._choose_next_index_generic(big_jump=big_jump)
@@ -640,7 +425,7 @@ class WebMusicPlayer:
                 full_path = self._resolve_path(path)
 
                 if not os.path.exists(full_path):
-                    print(f"[WARN] File not found: {full_path}")
+                    print(f"[WARN] Datei nicht gefunden: {full_path}")
                     self.played.add(idx)
                     attempts += 1
                     continue
@@ -652,24 +437,22 @@ class WebMusicPlayer:
                         self.current_idx = idx
                         self.played.add(idx)
                         self.last_vlc_state = None
-                        print(f"[INFO] (local) Playing: {path}")
+                        print(f"[INFO] (local) Spiele: {path}")
                         return idx
                     else:
-                        print(
-                            f"[WARN] (local) Skipped track (VLC issue): {path}"
-                        )
+                        print(f"[WARN] (local) Titel übersprungen (VLC-Problem): {path}")
                         self.played.add(idx)
                         attempts += 1
                 else:
-                    # remote: only set index
+                    # remote: nur Index setzen
                     self.prev_idx = self.current_idx
                     self.current_idx = idx
                     self.played.add(idx)
                     self.last_vlc_state = None
-                    print(f"[INFO] (remote) Selected new track: {path}")
+                    print(f"[INFO] (remote) Neuer Song ausgewählt: {path}")
                     return idx
 
-            print("[ERROR] No playable tracks found.")
+            print("[ERROR] Keine abspielbaren Titel gefunden.")
         self.current_idx = None
         return None
 
@@ -677,11 +460,11 @@ class WebMusicPlayer:
 
     def _start_vlc(self, full_path):
         if not HAVE_VLC or self.vlc_player is None:
-            print("[WARN] VLC not available, cannot play.")
+            print("[WARN] VLC nicht verfügbar, kann nicht abspielen.")
             return False
 
         if not os.path.exists(full_path):
-            print(f"[WARN] File not found: {full_path}")
+            print(f"[WARN] Datei nicht gefunden: {full_path}")
             return False
 
         try:
@@ -690,7 +473,7 @@ class WebMusicPlayer:
             self.vlc_player.play()
             return True
         except Exception as e:
-            print(f"[ERROR] VLC could not start file: {full_path} ({e})")
+            print(f"[ERROR] VLC konnte Datei nicht starten: {full_path} ({e})")
             return False
 
     def pause(self):
@@ -698,7 +481,7 @@ class WebMusicPlayer:
             if self.playback_mode == "local":
                 if HAVE_VLC and self.vlc_player is not None:
                     self.vlc_player.pause()
-            # remote: pause handled in the browser
+            # remote: Pause im Browser
 
     def stop(self):
         with self.lock:
@@ -708,7 +491,7 @@ class WebMusicPlayer:
             self.prev_idx = None
             self.played = set()
             self.last_vlc_state = None
-            # stop also resets the preset
+            # Stop setzt auch das Preset zurück
             self.active_preset_id = None
 
     def _autoadvance_loop(self):
@@ -739,15 +522,13 @@ class WebMusicPlayer:
                     vlc.State.Stopped,
                     vlc.State.Error,
                 ):
-                    print(
-                        f"[INFO] Autoplay (local): track finished (state={state}), next track..."
-                    )
+                    print(f"[INFO] Autoplay (local): aktueller Song fertig (State={state}), nächster Song...")
                     need_next = True
 
             if need_next:
                 self.next_song(big_jump=False)
 
-    # ---------- Theme color from cover ----------
+    # ---------- Theme-Farbe aus Cover ----------
 
     def _compute_theme_color(self, data_bytes):
         if not HAVE_PIL:
@@ -762,7 +543,7 @@ class WebMusicPlayer:
         except Exception:
             return None
 
-    # ---------- Status / similarity ----------
+    # ---------- Status / Ähnlichkeit ----------
 
     def _compute_similarity(self):
         if (
@@ -812,9 +593,9 @@ class WebMusicPlayer:
             rms = row.get("rms_mean", None)
             bright = row.get("spec_centroid_mean", None)
 
-            tempo_cat = row.get("tempo_cat", "unknown")
-            energy_cat = row.get("energy_cat", "unknown")
-            bright_cat = row.get("bright_cat", "unknown")
+            tempo_cat = row.get("tempo_cat", "unbekannt")
+            energy_cat = row.get("energy_cat", "unbekannt")
+            bright_cat = row.get("bright_cat", "unbekannt")
             cluster_id = int(row.get("cluster_id", -1))
 
             sim_pct, dist = self._compute_similarity()
@@ -838,7 +619,7 @@ class WebMusicPlayer:
                         pass
                 playing = state not in ("State.Stopped", "State.Ended")
             else:
-                # remote: browser plays, server only knows "should be running"
+                # remote: Browser spielt, Server weiß nur: "sollte laufen"
                 playing = True
 
             theme_color = self.theme_color_cache.get(self.current_idx)
@@ -886,7 +667,7 @@ class WebMusicPlayer:
         if not os.path.exists(full_path):
             return None, None
 
-        # 1) embedded cover
+        # 1) Eingebettetes Cover
         try:
             audio = MP3(full_path, ID3=ID3)
             if audio.tags:
@@ -903,7 +684,7 @@ class WebMusicPlayer:
         except Exception:
             pass
 
-        # 2) cover file in folder (cover/folder.jpg/png)
+        # 2) Cover-Datei im Ordner (cover/folder.jpg/png)
         folder = os.path.dirname(full_path)
         for name in ("cover.jpg", "cover.png", "folder.jpg", "folder.png"):
             candidate = os.path.join(folder, name)
@@ -911,11 +692,7 @@ class WebMusicPlayer:
                 try:
                     with open(candidate, "rb") as f:
                         data = f.read()
-                    mime = (
-                        "image/jpeg"
-                        if candidate.lower().endswith(".jpg")
-                        else "image/png"
-                    )
+                    mime = "image/jpeg" if candidate.lower().endswith(".jpg") else "image/png"
                     color = self._compute_theme_color(data)
                     with self.lock:
                         self.cover_cache[song_idx] = (mime, data)
@@ -941,7 +718,7 @@ class WebMusicPlayer:
         return full_path
 
 
-# ================== Flask app =======================
+# ================== Flask-App =======================
 
 app = Flask(__name__)
 player = WebMusicPlayer(MUSIC_DIR, CSV_PATH)
@@ -951,7 +728,7 @@ player = WebMusicPlayer(MUSIC_DIR, CSV_PATH)
 def index():
     html = """
 <!DOCTYPE html>
-<html lang="en">
+<html lang="de">
 <head>
 <meta charset="UTF-8">
 <title>Smart Music Player</title>
@@ -972,7 +749,7 @@ body {
   color:#eee;
 }
 
-/* Background + layout */
+/* Hintergrund + Layout */
 #bg {
   position: relative;
   min-height: 100vh;
@@ -984,7 +761,7 @@ body {
   flex-direction:column;
 }
 
-/* Dark overlay */
+/* Abdunkelung */
 #bg::before {
   content: "";
   position: absolute;
@@ -1001,16 +778,16 @@ body {
   display:flex;
   flex-direction:column;
   align-items:center;
-  justify-content:center;   /* vertically centered */
+  justify-content:center;   /* NEU: vertikal zentrieren */
 }
 
-/* max width for desktop, still readable on mobile */
+/* max-Breite für Desktop, gut lesbar am Handy */
 #inner {
   width: 100%;
   max-width: 640px;
 }
 
-/* Track title */
+/* Track-Titel oben */
 .track-title {
   font-size: 1.4rem;
   font-weight: 600;
@@ -1022,7 +799,7 @@ body {
 
 /* Cover */
 #cover {
-  width: min(90vw, 360px);      /* nearly full-width on mobiles */
+  width: min(90vw, 360px);      /* am Handy fast bildfüllend */
   max-width: 360px;
   height: auto;
   aspect-ratio: 1 / 1;
@@ -1032,13 +809,13 @@ body {
   object-fit:cover;
   border-radius: 18px;
   box-shadow:
-    0 18px 35px rgba(0,0,0,0.85),
-    0 0 0 1px rgba(255,255,255,0.05);
+    0 18px 35px rgba(0,0,0,0.85),  /* kräftiger Drop Shadow */
+    0 0 0 1px rgba(255,255,255,0.05); /* ganz feiner Rand */
   transform: translateY(0);
   transition: box-shadow 0.25s ease, transform 0.25s ease;
 }
 
-/* subtle hover effect (mainly desktop) */
+/* dezenter Hover-Effekt (vor allem Desktop) */
 #cover:hover {
   transform: translateY(-4px);
   box-shadow:
@@ -1118,7 +895,7 @@ button:hover { opacity:0.9; }
 .label { color:#aaa; }
 .value { color:#fff; font-weight:bold; }
 
-/* Progress bar */
+/* Progressbar */
 .bar {
   width:100%;
   height:8px;
@@ -1130,11 +907,11 @@ button:hover { opacity:0.9; }
 .bar-inner { height:100%; background: var(--accent); width:0%; }
 .small { font-size: 0.85em; color:#aaa; margin-top:2px; }
 
-/* Audio player */
+/* Audio-Player */
 #audioPlayer {
   width:100%;
   margin-top:4px;
-  display:none; /* visible only in remote mode */
+  display:none; /* nur im Remote-Modus sichtbar */
 }
 
 /* Footer */
@@ -1149,7 +926,7 @@ footer {
   padding:6px 10px;
 }
 
-/* Mobile touch optimization */
+/* Mobile-Touch-Optimierung */
 @media (max-width: 480px) {
   .track-title {
     font-size: 1.2rem;
@@ -1170,8 +947,8 @@ footer {
       <img id="cover" src="" alt="Cover">
 
       <div class="mode-toggle">
-        <button id="btnLocal" class="btn-toggle active" onclick="setMode('local')">Local (VLC)</button>
-        <button id="btnRemote" class="btn-toggle" onclick="setMode('remote')">Remote (browser)</button>
+        <button id="btnLocal" class="btn-toggle active" onclick="setMode('local')">Lokal (VLC)</button>
+        <button id="btnRemote" class="btn-toggle" onclick="setMode('remote')">Remote (Browser)</button>
       </div>
 
       <audio id="audioPlayer" controls></audio>
@@ -1191,21 +968,21 @@ footer {
           </span>
         </div>
         <div class="info-row">
-          <span class="label">Energy:</span>
+          <span class="label">Energie:</span>
           <span class="value">
             <span id="energy">-</span>
             &nbsp;(<span id="energy_cat">-</span>)
           </span>
         </div>
         <div class="info-row">
-          <span class="label">Brightness:</span>
+          <span class="label">Helligkeit:</span>
           <span class="value">
             <span id="bright">-</span>
             &nbsp;(<span id="bright_cat">-</span>)
           </span>
         </div>
         <div class="info-row">
-          <span class="label">Similarity:</span>
+          <span class="label">Ähnlichkeit:</span>
           <span class="value" id="similarity">-</span>
         </div>
       </div>
@@ -1214,17 +991,17 @@ footer {
       <div class="small"><span id="timepos">0:00 / 0:00</span></div>
 
       <div style="margin-top:12px; text-align:center;">
-        <button class="btn-primary" onclick="sendCommand('start')">▶️ Start / restart</button>
-        <button class="btn-primary" onclick="sendCommand('next')">⏭️ Next track</button>
-        <button class="btn-secondary" onclick="sendCommand('big_jump')">⏩ Big jump</button>
-        <button class="btn-secondary" onclick="sendCommand('pause')">⏯️ Pause / resume</button>
+        <button class="btn-primary" onclick="sendCommand('start')">▶️ Start / Neuer Start</button>
+        <button class="btn-primary" onclick="sendCommand('next')">⏭️ Nächster Song</button>
+        <button class="btn-secondary" onclick="sendCommand('big_jump')">⏩ Großer Sprung</button>
+        <button class="btn-secondary" onclick="sendCommand('pause')">⏯️ Pause/Weiter</button>
         <button class="btn-secondary" onclick="sendCommand('stop')">⏹️ Stop</button>
       </div>
     </div>
   </div>
 
   <footer>
-    Smart Music Player (Raspberry Pi / PC)
+    Smart Music Player (Raspi / PC)
   </footer>
 </div>
 
@@ -1256,7 +1033,7 @@ function renderPresets() {
   container.innerHTML = '';
   if (!presets || presets.length === 0) {
     const span = document.createElement('span');
-    span.textContent = 'No presets loaded.';
+    span.textContent = 'Keine Presets geladen.';
     span.style.color = '#777';
     container.appendChild(span);
     return;
@@ -1316,23 +1093,23 @@ async function setMode(mode) {
   }
 }
 
-// Helper: file name -> "pretty" title
+// Hilfsfunktion: Dateiname → "schöner" Titel
 function prettyTitle(filename) {
   if (!filename) return "-";
   let name = filename;
 
-  // strip extension (.mp3 / .MP3)
+  // Extension weg (.mp3 / .MP3)
   if (name.toLowerCase().endsWith('.mp3')) {
     name = name.slice(0, -4);
   }
 
-  // strip leading track numbers like "01 - ", "02_", "03." etc.
+  // Führende Tracknummern wie "01 - ", "02_", "03." etc. weg
   name = name.replace(/^\\s*\\d+\\s*[-._]\\s*/, '');
 
   return name;
 }
 
-// apply theme color
+// Theme-Farbe anwenden
 function applyThemeColor(hex) {
   if (!hex) return;
   const m = /^#?([0-9a-fA-F]{6})$/.exec(hex);
@@ -1385,31 +1162,24 @@ async function fetchStatus() {
       return;
     }
 
-    // title
+    // Titel oben
     const niceName = prettyTitle(data.current_file || "");
     document.getElementById('titleTop').textContent = niceName || "-";
 
-    document.getElementById('cluster').textContent =
-      data.cluster_id !== null ? data.cluster_id : "-";
+    document.getElementById('cluster').textContent = data.cluster_id !== null ? data.cluster_id : "-";
 
-    document.getElementById('tempo').textContent =
-      data.tempo !== null ? data.tempo.toFixed(1) + " BPM" : "-";
+    document.getElementById('tempo').textContent = data.tempo !== null ? data.tempo.toFixed(1) + " BPM" : "-";
     document.getElementById('tempo_cat').textContent = data.tempo_cat || "-";
 
-    document.getElementById('energy').textContent =
-      data.rms !== null ? data.rms.toFixed(4) : "-";
+    document.getElementById('energy').textContent = data.rms !== null ? data.rms.toFixed(4) : "-";
     document.getElementById('energy_cat').textContent = data.energy_cat || "-";
 
-    document.getElementById('bright').textContent =
-      data.bright !== null ? data.bright.toFixed(1) : "-";
+    document.getElementById('bright').textContent = data.bright !== null ? data.bright.toFixed(1) : "-";
     document.getElementById('bright_cat').textContent = data.bright_cat || "-";
 
     if (data.similarity_percent !== null) {
       document.getElementById('similarity').textContent =
-        data.similarity_percent.toFixed(1) +
-        "% (distance " +
-        data.similarity_dist.toFixed(3) +
-        ")";
+        data.similarity_percent.toFixed(1) + "% (Distanz " + data.similarity_dist.toFixed(3) + ")";
     } else {
       document.getElementById('similarity').textContent = "n/a";
     }
@@ -1418,8 +1188,7 @@ async function fetchStatus() {
       if (data.current_idx !== lastCoverIdx) {
         const coverUrl = "/api/cover/" + data.current_idx + "?t=" + Date.now();
         document.getElementById('cover').src = coverUrl;
-        document.getElementById('bg').style.backgroundImage =
-          "url('" + coverUrl + "')";
+        document.getElementById('bg').style.backgroundImage = "url('" + coverUrl + "')";
         lastCoverIdx = data.current_idx;
       }
     }
@@ -1430,8 +1199,7 @@ async function fetchStatus() {
 
     if (playbackMode === 'remote') {
       if (data.current_idx !== null && data.current_idx !== lastSongIdx) {
-        const streamUrl =
-          "/api/stream/" + data.current_idx + "?t=" + Date.now();
+        const streamUrl = "/api/stream/" + data.current_idx + "?t=" + Date.now();
         audio.src = streamUrl;
         audio.dataset.currentIdx = data.current_idx;
         lastSongIdx = data.current_idx;
@@ -1441,23 +1209,16 @@ async function fetchStatus() {
       }
 
       if (!isNaN(audio.duration) && audio.duration > 0) {
-        const pct = Math.max(
-          0,
-          Math.min(100, (audio.currentTime / audio.duration) * 100)
-        );
+        const pct = Math.max(0, Math.min(100, (audio.currentTime / audio.duration) * 100));
         progressEl.style.width = pct + "%";
-        timeEl.textContent =
-          formatTime(audio.currentTime) + " / " + formatTime(audio.duration);
+        timeEl.textContent = formatTime(audio.currentTime) + " / " + formatTime(audio.duration);
       } else {
         progressEl.style.width = "0%";
         timeEl.textContent = "0:00 / 0:00";
       }
     } else {
       if (data.length && data.position !== null) {
-        const pct = Math.max(
-          0,
-          Math.min(100, (data.position / data.length) * 100)
-        );
+        const pct = Math.max(0, Math.min(100, (data.position / data.length) * 100));
         progressEl.style.width = pct + "%";
         timeEl.textContent =
           formatTime(data.position) + " / " + formatTime(data.length);
@@ -1517,8 +1278,7 @@ async function onAudioEnded() {
     const data = await resp.json();
     if (data.idx !== null && data.idx !== undefined) {
       const audio = document.getElementById('audioPlayer');
-      const streamUrl =
-        "/api/stream/" + data.idx + "?t=" + Date.now();
+      const streamUrl = "/api/stream/" + data.idx + "?t=" + Date.now();
       audio.src = streamUrl;
       audio.dataset.currentIdx = data.idx;
       lastSongIdx = data.idx;
@@ -1633,4 +1393,3 @@ def api_remote_ended():
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000, debug=False)
-

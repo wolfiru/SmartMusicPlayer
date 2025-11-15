@@ -11,11 +11,11 @@ from rich.prompt import Prompt
 from rich.traceback import install as rich_traceback_install
 from rich.progress import Progress, BarColumn, TimeElapsedColumn, TimeRemainingColumn
 
-# Prettier tracebacks
+# Schönere Tracebacks
 rich_traceback_install()
 console = Console()
 
-# Optionally load VLC
+# VLC optional laden
 try:
     import vlc
 
@@ -24,7 +24,7 @@ except ImportError:
     HAVE_VLC = False
     vlc = None
 
-# On Windows: non-blocking keyboard input
+# Unter Windows: non-blocking Tastaturabfrage
 ON_WINDOWS = sys.platform.startswith("win")
 if ON_WINDOWS:
     try:
@@ -32,20 +32,20 @@ if ON_WINDOWS:
     except ImportError:
         ON_WINDOWS = False
 
-# === CONFIGURATION ===
-MUSIC_DIR = r"M:\Favoriten (Spotify)"  # <-- adjust like in the analyzer
+# === KONFIGURATION ===
+MUSIC_DIR = r"M:\Favoriten (Spotify)"  # <-- anpassen wie beim Analyzer
 CSV_PATH = os.path.join(MUSIC_DIR, "song_features_with_clusters.csv")
 
 
 def tempo_category(bpm):
     if pd.isna(bpm):
-        return "unknown"
+        return "unbekannt"
     if bpm < 90:
-        return "slow"
+        return "langsam"
     elif bpm < 120:
-        return "medium"
+        return "mittel"
     else:
-        return "fast"
+        return "schnell"
 
 
 class SmartClusterPlayer:
@@ -55,24 +55,24 @@ class SmartClusterPlayer:
 
         if not os.path.exists(csv_path):
             raise FileNotFoundError(
-                "CSV not found: %s\nPlease run the analyzer first." % csv_path
+                "CSV nicht gefunden: %s\nBitte zuerst den Analyzer laufen lassen." % csv_path
             )
 
         console.rule("[bold cyan]SmartClusterPlayer[/bold cyan]")
-        console.print("Loading cluster and feature data from:\n[bold]%s[/bold]" % csv_path)
+        console.print("Lade Cluster- und Feature-Daten aus:\n[bold]%s[/bold]" % csv_path)
 
         self.df = pd.read_csv(csv_path)
         if "cluster_id" not in self.df.columns:
-            raise ValueError("CSV has no 'cluster_id' column.")
+            raise ValueError("CSV hat keine Spalte 'cluster_id'.")
 
         self.df["cluster_id"] = self.df["cluster_id"].astype(int)
 
-        # Tempo category per track
+        # Tempo-Kategorie je Song
         self.df["tempo_cat"] = self.df.get("tempo", pd.Series([None] * len(self.df))).apply(
             tempo_category
         )
 
-        # Global thresholds for energy and brightness
+        # Globale Schwellen für Energie und Helligkeit
         if "rms_mean" in self.df.columns:
             q_low, q_high = self.df["rms_mean"].quantile([0.33, 0.66])
             self.energy_low = q_low
@@ -91,23 +91,23 @@ class SmartClusterPlayer:
 
         def energy_category(val):
             if pd.isna(val) or self.energy_low is None:
-                return "unknown"
+                return "unbekannt"
             if val < self.energy_low:
-                return "calm"
+                return "ruhig"
             elif val < self.energy_high:
                 return "normal"
             else:
-                return "powerful"
+                return "druckvoll"
 
         def brightness_category(val):
             if pd.isna(val) or self.bright_low is None:
-                return "unknown"
+                return "unbekannt"
             if val < self.bright_low:
-                return "dark"
+                return "dunkel"
             elif val < self.bright_high:
                 return "neutral"
             else:
-                return "bright"
+                return "hell"
 
         self.df["energy_cat"] = self.df.get("rms_mean", pd.Series([None] * len(self.df))).apply(
             energy_category
@@ -119,15 +119,15 @@ class SmartClusterPlayer:
         self.groups = self.df.groupby("cluster_id")
         self.all_cluster_ids = sorted(self.groups.groups.keys())
 
-        # Session state for cluster mode
+        # Session-Zustand Cluster-Modus
         self.current_cluster_id = None
         self.played_in_cluster = set()
         self.blocked_clusters = set()
 
-        # Mode: 'cluster' or 'similar'
+        # Modus: 'cluster' oder 'similar'
         self.mode = "cluster"
 
-        # Similarity-mode features
+        # Ähnlichkeitsmodus-Features
         self.feature_cols = [
             c
             for c in self.df.columns
@@ -135,7 +135,7 @@ class SmartClusterPlayer:
         ]
         if not self.feature_cols:
             console.print(
-                "[yellow]Warning: no suitable feature columns for similarity mode found.[/yellow]"
+                "[yellow]Warnung: keine geeigneten Feature-Spalten für Ähnlichkeitsmodus gefunden.[/yellow]"
             )
             self.X_norm = None
             self.weights = None
@@ -147,7 +147,7 @@ class SmartClusterPlayer:
             self.feature_std[self.feature_std == 0] = 1.0
             self.X_norm = (feat_mat.values - self.feature_mean) / self.feature_std
 
-            # Weights: tempo/energy strong, brightness medium, MFCCs light
+            # Gewichte: Tempo/Energie stark, Helligkeit mittel, MFCCs leicht
             w = []
             for col in self.feature_cols:
                 if col == "tempo":
@@ -162,51 +162,51 @@ class SmartClusterPlayer:
                     w.append(1.0)
             self.weights = np.array(w)
 
-        # Similarity mode: current index & played tracks
+        # Ähnlichkeitsmodus: aktueller Index & gespielte Songs
         self.sim_current_idx = None
         self.sim_played = set()
         self.sim_force_big_jump = False
 
-        # Index tracking for similarity output
+        # Index-Tracking für Ähnlichkeitsanzeige
         self.current_idx = None
         self.prev_idx = None
 
-        # VLC player
+        # VLC-Player
         if HAVE_VLC:
             self.vlc_instance = vlc.Instance()
         else:
             self.vlc_instance = None
         self.vlc_player = None
 
-    # ---------- Mode selection ----------
+    # ---------- Modus-Auswahl ----------
 
     def select_mode(self):
         console.print(
-            "\n[bold]Mode selection:[/bold]\n"
-            "[b]1[/b] → Cluster mode (by groups/moods)\n"
-            "[b]2[/b] → SIMILARITY mode (intelligent playlist, small jumps)\n"
+            "\n[bold]Modus-Auswahl:[/bold]\n"
+            "[b]1[/b] → Cluster-Modus (nach Gruppen/Moods)\n"
+            "[b]2[/b] → ÄHNLICHKEITS-Modus (intelligente Playlist, kleine Sprünge)\n"
         )
         while True:
-            choice = Prompt.ask("Mode (1/2)", default="1").strip()
+            choice = Prompt.ask("Modus (1/2)", default="1").strip()
             if choice == "1":
                 self.mode = "cluster"
-                console.print("[green]Cluster mode selected.[/green]")
+                console.print("[green]Cluster-Modus gewählt.[/green]")
                 self.select_initial_cluster()
                 return
             elif choice == "2":
                 if self.X_norm is None or self.weights is None:
                     console.print(
-                        "[red]Similarity mode not available (no features present).[/red]"
+                        "[red]Ähnlichkeitsmodus nicht verfügbar (keine Features vorhanden).[/red]"
                     )
                     continue
                 self.mode = "similar"
-                console.print("[green]Similarity mode selected.[/green]")
+                console.print("[green]Ähnlichkeitsmodus gewählt.[/green]")
                 self.init_similar_mode()
                 return
             else:
-                console.print("[red]Please enter 1 or 2.[/red]")
+                console.print("[red]Bitte 1 oder 2 eingeben.[/red]")
 
-    # ---------- Cluster info / stats ----------
+    # ---------- Cluster-Infos / Stats ----------
 
     def get_cluster_stats(self):
         agg = self.df.groupby("cluster_id").agg(
@@ -219,7 +219,7 @@ class SmartClusterPlayer:
         def mode_for(col, cid):
             series = self.df[self.df["cluster_id"] == cid][col].dropna()
             if series.empty:
-                return "unknown"
+                return "unbekannt"
             return series.mode().iloc[0]
 
         agg["tempo_cat"] = agg["cluster_id"].apply(lambda cid: mode_for("tempo_cat", cid))
@@ -232,12 +232,12 @@ class SmartClusterPlayer:
         stats = self.get_cluster_stats()
 
         table = Table(show_header=True, header_style="bold magenta")
-        table.add_column("Cluster ID", justify="center")
-        table.add_column("#", justify="right")
+        table.add_column("Cluster-ID", justify="center")
+        table.add_column("Anz.", justify="right")
         table.add_column("Ø BPM", justify="right")
         table.add_column("Tempo", justify="center")
-        table.add_column("Energy", justify="center")
-        table.add_column("Brightness", justify="center")
+        table.add_column("Energie", justify="center")
+        table.add_column("Helligkeit", justify="center")
 
         for _, row in stats.iterrows():
             bpm_str = "-" if pd.isna(row["avg_tempo"]) else "%.1f" % row["avg_tempo"]
@@ -250,15 +250,15 @@ class SmartClusterPlayer:
                 row["bright_cat"],
             )
 
-        console.print("\n[bold cyan]Available clusters:[/bold cyan]")
+        console.print("\n[bold cyan]Verfügbare Cluster:[/bold cyan]")
         console.print(table)
 
-    # ---------- Cluster mode: selection ----------
+    # ---------- Cluster-Modus: Auswahl ----------
 
     def pick_random_cluster(self):
         candidates = [cid for cid in self.all_cluster_ids if cid not in self.blocked_clusters]
         if not candidates:
-            console.print("[red]No clusters left (all blocked).[/red]")
+            console.print("[red]Es sind keine Cluster mehr frei (alle geblockt).[/red]")
             return None
         return random.choice(candidates)
 
@@ -275,35 +275,35 @@ class SmartClusterPlayer:
     def select_by_filters(self):
         stats = self.get_cluster_stats()
 
-        console.print("\n[bold cyan]Filter selection[/bold cyan]")
+        console.print("\n[bold cyan]Filter-Auswahl[/bold cyan]")
         tempo_opt = Prompt.ask(
-            "Tempo (l=slow, m=medium, s=fast, *=any)", default="*"
+            "Tempo (l=langsam, m=mittel, s=schnell, *=egal)", default="*"
         ).lower()
         energy_opt = Prompt.ask(
-            "Energy (r=calm, n=normal, d=powerful, *=any)", default="*"
+            "Energie (r=ruhig, n=normal, d=druckvoll, *=egal)", default="*"
         ).lower()
         bright_opt = Prompt.ask(
-            "Brightness (d=dark, n=neutral, h=bright, *=any)", default="*"
+            "Helligkeit (d=dunkel, n=neutral, h=hell, *=egal)", default="*"
         ).lower()
 
         df = stats.copy()
 
         if tempo_opt in ("l", "m", "s"):
-            t_map = {"l": "slow", "m": "medium", "s": "fast"}
+            t_map = {"l": "langsam", "m": "mittel", "s": "schnell"}
             df = df[df["tempo_cat"] == t_map[tempo_opt]]
 
         if energy_opt in ("r", "n", "d"):
-            e_map = {"r": "calm", "n": "normal", "d": "powerful"}
+            e_map = {"r": "ruhig", "n": "normal", "d": "druckvoll"}
             df = df[df["energy_cat"] == e_map[energy_opt]]
 
         if bright_opt in ("d", "n", "h"):
-            b_map = {"d": "dark", "n": "neutral", "h": "bright"}
+            b_map = {"d": "dunkel", "n": "neutral", "h": "hell"}
             df = df[df["bright_cat"] == b_map[bright_opt]]
 
         df = df[~df["cluster_id"].isin(self.blocked_clusters)]
 
         if df.empty:
-            console.print("[yellow]No cluster matches these filters.[/yellow]")
+            console.print("[yellow]Kein Cluster passt zu diesen Filtern.[/yellow]")
             return
 
         cid = random.choice(df["cluster_id"].tolist())
@@ -313,17 +313,17 @@ class SmartClusterPlayer:
         self.show_cluster_overview()
 
         console.print(
-            "\n[bold]Cluster selection:[/bold]\n"
-            "[b]ID[/b]   → specific cluster (e.g. 3)\n"
-            "[b]r[/b]    → random cluster\n"
-            "[b]l[/b]    → slow cluster\n"
-            "[b]m[/b]    → medium cluster\n"
-            "[b]s[/b]    → fast cluster\n"
-            "[b]f[/b]    → filter by tempo/energy/brightness\n"
+            "\n[bold]Cluster-Auswahl:[/bold]\n"
+            "[b]ID[/b]   → konkreten Cluster (z.B. 3)\n"
+            "[b]r[/b]    → zufälliger Cluster\n"
+            "[b]l[/b]    → langsamer Cluster\n"
+            "[b]m[/b]    → mittlerer Cluster\n"
+            "[b]s[/b]    → schneller Cluster\n"
+            "[b]f[/b]    → Filter nach Tempo/Energie/Helligkeit\n"
         )
 
         while True:
-            choice = Prompt.ask("Choice (ID/r/l/m/s/f)").strip().lower()
+            choice = Prompt.ask("Auswahl (ID/r/l/m/s/f)").strip().lower()
 
             if choice == "r":
                 cid = self.pick_random_cluster()
@@ -331,14 +331,14 @@ class SmartClusterPlayer:
                     self.set_cluster(cid)
                     return
             elif choice in ("l", "m", "s"):
-                tempo_map = {"l": "slow", "m": "medium", "s": "fast"}
+                tempo_map = {"l": "langsam", "m": "mittel", "s": "schnell"}
                 cid = self.pick_random_cluster_by_tempo(tempo_map[choice])
                 if cid is not None:
                     self.set_cluster(cid)
                     return
                 else:
                     console.print(
-                        "[yellow]No cluster with tempo '%s' found.[/yellow]"
+                        "[yellow]Kein Cluster mit Tempo '%s' gefunden.[/yellow]"
                         % tempo_map[choice]
                     )
             elif choice == "f":
@@ -352,9 +352,9 @@ class SmartClusterPlayer:
                         self.set_cluster(cid)
                         return
                     else:
-                        console.print("[red]Invalid cluster ID.[/red]")
+                        console.print("[red]Ungültige Cluster-ID.[/red]")
                 except ValueError:
-                    console.print("[red]Input not understood.[/red]")
+                    console.print("[red]Eingabe nicht verstanden.[/red]")
 
     def set_cluster(self, cluster_id):
         self.current_cluster_id = cluster_id
@@ -363,20 +363,20 @@ class SmartClusterPlayer:
         cluster_df = self.groups.get_group(cluster_id)
         tempo_vals = cluster_df.get("tempo")
         avg_bpm = tempo_vals.mean() if tempo_vals is not None else None
-        cat = tempo_category(avg_bpm) if avg_bpm is not None else "unknown"
+        cat = tempo_category(avg_bpm) if avg_bpm is not None else "unbekannt"
 
         console.print(
-            "\n[bold green]Starting with cluster %d[/bold green]" % cluster_id
+            "\n[bold green]Starte mit Cluster %d[/bold green]" % cluster_id
         )
         if avg_bpm is not None:
             console.print(
-                "Tracks: [bold]%d[/bold], Ø tempo: [bold]%.1f[/bold] BPM (%s)"
+                "Songs: [bold]%d[/bold], Ø Tempo: [bold]%.1f[/bold] BPM (%s)"
                 % (len(cluster_df), avg_bpm, cat)
             )
         else:
-            console.print("Tracks: [bold]%d[/bold]" % len(cluster_df))
+            console.print("Songs: [bold]%d[/bold]" % len(cluster_df))
 
-    # ---------- Cluster mode: next tracks ----------
+    # ---------- Cluster-Modus: nächste Songs ----------
 
     def get_next_song_in_cluster(self):
         if self.current_cluster_id is None:
@@ -387,7 +387,7 @@ class SmartClusterPlayer:
 
         if candidates.empty:
             console.print(
-                "[yellow]Cluster %d is empty for this session.[/yellow]"
+                "[yellow]Cluster %d ist für diese Session leer.[/yellow]"
                 % self.current_cluster_id
             )
             self.blocked_clusters.add(self.current_cluster_id)
@@ -402,52 +402,52 @@ class SmartClusterPlayer:
         idx = row.name
         self.played_in_cluster.add(idx)
 
-        # Index tracking for similarity output
+        # Index-Tracking für Ähnlichkeitsanzeige
         self.prev_idx = self.current_idx
         self.current_idx = idx
 
         return row["path"], idx
 
-    # ---------- Similarity mode: initialization & logic ----------
+    # ---------- Ähnlichkeitsmodus: Initialisierung & Logik ----------
 
     def init_similar_mode(self):
-        """Choose start track for similarity mode."""
+        """Startsong für Ähnlichkeitsmodus wählen."""
         self.sim_played = set()
         self.sim_current_idx = None
         self.prev_idx = None
         self.current_idx = None
 
         console.print(
-            "\n[bold cyan]Start in similarity mode[/bold cyan]\n"
-            "[b]r[/b] → random start track\n"
-            "[b]c[/b] → start track from a chosen cluster\n"
+            "\n[bold cyan]Start im Ähnlichkeitsmodus[/bold cyan]\n"
+            "[b]r[/b] → zufälliger Startsong\n"
+            "[b]c[/b] → Startsong aus einem gewählten Cluster\n"
         )
-        choice = Prompt.ask("Choice (r/c)", default="r").strip().lower()
+        choice = Prompt.ask("Auswahl (r/c)", default="r").strip().lower()
 
         if choice == "c":
-            # Choose cluster and random track from it
+            # Cluster wählen und zufälligen Song daraus nehmen
             self.select_initial_cluster()
             cluster_df = self.groups.get_group(self.current_cluster_id)
             row = cluster_df.sample(1).iloc[0]
         else:
-            # fully random track
+            # komplett zufälliger Song
             row = self.df.sample(1).iloc[0]
 
         idx = row.name
         self.sim_current_idx = idx
         self.sim_played.add(idx)
 
-        # Index tracking
+        # Index-Tracking
         self.prev_idx = None
         self.current_idx = idx
 
         console.print(
-            "[green]Similarity mode started with:[/green] %s"
+            "[green]Ähnlichkeitsmodus gestartet mit:[/green] %s"
             % os.path.basename(row["path"])
         )
 
     def _choose_next_similar_index(self, big_jump=False):
-        """Pick the next track index based on distance in feature space."""
+        """Wähle den nächsten Song-Index basierend auf Distanz im Feature-Raum."""
         if self.X_norm is None or self.weights is None:
             return None
 
@@ -473,14 +473,14 @@ class SmartClusterPlayer:
             return None
 
         if big_jump:
-            # deliberate style jump: take from the "far" part (top ~20%)
+            # bewusster Stil-Sprung: nimm aus dem „entfernten“ Teil (oberste 20%)
             if n <= 5:
                 cand_indices = list(range(n))
             else:
                 start = int(0.8 * n)
                 cand_indices = list(range(start, n))
         else:
-            # normal mode: first very similar, then moderately different
+            # normaler Modus: erst sehr ähnliche, dann moderat andere
             soft = max(1, int(0.3 * n))
             hard = max(1, int(0.6 * n))
 
@@ -503,7 +503,7 @@ class SmartClusterPlayer:
         return chosen_global
 
     def get_next_song_similar(self):
-        """Next track in similarity mode."""
+        """Nächster Song im Ähnlichkeitsmodus."""
         if self.sim_current_idx is None:
             self.init_similar_mode()
             idx = self.sim_current_idx
@@ -519,15 +519,15 @@ class SmartClusterPlayer:
         self.sim_current_idx = next_idx
         self.sim_played.add(next_idx)
 
-        # Index tracking
+        # Index-Tracking
         self.prev_idx = self.current_idx
         self.current_idx = next_idx
 
         return self.df.loc[next_idx, "path"], next_idx
 
     def skip_group_similar(self):
-        """In similarity mode: force a big style jump for the next track."""
-        console.print("[yellow]Big jump in similarity mode requested.[/yellow]")
+        """Im Ähnlichkeitsmodus: erzwinge beim nächsten Song einen großen Stil-Sprung."""
+        console.print("[yellow]Großer Sprung im Ähnlichkeitsmodus angefordert.[/yellow]")
         self.sim_force_big_jump = True
 
     # ---------- Audio ----------
@@ -539,8 +539,8 @@ class SmartClusterPlayer:
     def start_audio(self, path):
         if not HAVE_VLC:
             console.print(
-                "[yellow]VLC playback not available (python-vlc not installed).[/yellow]\n"
-                "[yellow]Would play:[/yellow] %s" % path
+                "[yellow]VLC-Playback nicht verfügbar (python-vlc nicht installiert).[/yellow]\n"
+                "[yellow]Würde spielen:[/yellow] %s" % path
             )
             return
 
@@ -553,19 +553,19 @@ class SmartClusterPlayer:
         self.vlc_player.play()
 
     def _print_song_info(self, song_path):
-        """Print additional parameters + similarity factor."""
+        """Zusätzliche Parameter + Ähnlichkeitsfaktor ausgeben."""
         filename = os.path.basename(song_path)
         if self.mode == "cluster":
             mode_tag = f"Cluster {self.current_cluster_id}"
         else:
-            mode_tag = "Similarity mode"
+            mode_tag = "Ähnlichkeitsmodus"
 
         console.print(
-            "\n[bold green]Now playing:[/bold green] %s (%s)"
+            "\n[bold green]Jetzt läuft:[/bold green] %s (%s)"
             % (filename, mode_tag)
         )
 
-        # Track parameters
+        # Song-Parameter
         if self.current_idx is None or self.current_idx not in self.df.index:
             return
 
@@ -579,9 +579,9 @@ class SmartClusterPlayer:
         rms_str = "-" if pd.isna(rms) else f"{rms:.4f}"
         bright_str = "-" if pd.isna(bright) else f"{bright:.1f}"
 
-        tempo_cat = row.get("tempo_cat", "unknown")
-        energy_cat = row.get("energy_cat", "unknown")
-        bright_cat = row.get("bright_cat", "unknown")
+        tempo_cat = row.get("tempo_cat", "unbekannt")
+        energy_cat = row.get("energy_cat", "unbekannt")
+        bright_cat = row.get("bright_cat", "unbekannt")
 
         cid = row.get("cluster_id", None)
         if pd.isna(cid):
@@ -590,13 +590,13 @@ class SmartClusterPlayer:
             cluster_str = f"Cluster: {int(cid)}"
 
         console.print(
-            f"[cyan]Info:[/cyan] Tempo: {tempo_str} | Energy (RMS): {rms_str} | Brightness: {bright_str}"
+            f"[cyan]Info:[/cyan] Tempo: {tempo_str} | Energie (RMS): {rms_str} | Helligkeit: {bright_str}"
         )
         console.print(
-            f"[cyan]Mood:[/cyan] Tempo={tempo_cat}, Energy={energy_cat}, Brightness={bright_cat} | {cluster_str}"
+            f"[cyan]Mood:[/cyan] Tempo={tempo_cat}, Energie={energy_cat}, Helligkeit={bright_cat} | {cluster_str}"
         )
 
-        # Similarity factor
+        # Ähnlichkeitsfaktor
         if (
             self.prev_idx is None
             or self.X_norm is None
@@ -606,7 +606,7 @@ class SmartClusterPlayer:
             or self.current_idx < 0
             or self.current_idx >= len(self.df)
         ):
-            console.print("[cyan]Similarity to previous track:[/cyan] n/a (first track or no data)")
+            console.print("[cyan]Ähnlichkeit zum vorherigen Lied:[/cyan] n/a (erstes Lied oder keine Daten)")
         else:
             v_prev = self.X_norm[self.prev_idx]
             v_cur = self.X_norm[self.current_idx]
@@ -616,21 +616,21 @@ class SmartClusterPlayer:
             sim = 1.0 / (1.0 + dist)
             sim_pct = sim * 100.0
             console.print(
-                f"[cyan]Similarity to previous track:[/cyan] {sim_pct:.1f}% (distance: {dist:.3f})"
+                f"[cyan]Ähnlichkeit zum vorherigen Lied:[/cyan] {sim_pct:.1f}% (Distanz: {dist:.3f})"
             )
 
     def play_song_with_progress(self, song_path):
         """
-        Plays a track, shows progress, reacts to key presses.
-        Return value: action as string:
+        Spielt einen Song, zeigt Fortschritt, hört auf Tastendrücke.
+        Rückgabe: Aktion als String:
           'finished', 'next', 'skip_group', 'change_cluster', 'quit'
         """
-        # Print track info (including similarity)
+        # Songinfo (inkl. Ähnlichkeit) ausgeben
         self._print_song_info(song_path)
 
         if not HAVE_VLC:
             choice = Prompt.ask(
-                "[Enter]=next, s=skip track, g=cluster/big jump, c=change selection, q=quit",
+                "[Enter]=weiter, s=Song skip, g=Gruppe/Big Jump, c=Neu wählen, q=quit",
                 default="",
             ).strip().lower()
             if choice == "q":
@@ -642,12 +642,12 @@ class SmartClusterPlayer:
             else:
                 return "next"
 
-        # With VLC: show progress
+        # Mit VLC: Fortschritt anzeigen
         self.start_audio(song_path)
 
-        # wait a bit until VLC knows the length
+        # etwas warten, bis VLC die Länge kennt
         length_ms = -1
-        for _ in range(25):  # ~5 seconds
+        for _ in range(25):  # ~5 Sekunden
             length_ms = self.vlc_player.get_length()
             if length_ms > 0:
                 break
@@ -659,8 +659,8 @@ class SmartClusterPlayer:
             total_seconds = length_ms / 1000.0
 
         console.print(
-            "[cyan]Controls:[/cyan] Enter=next track • s=skip track • "
-            "g=cluster/big jump • c=change selection • q=quit"
+            "[cyan]Steuerung:[/cyan] Enter=sofort nächster Song • s=Song skip • "
+            "g=Gruppe/Big Jump • c=Neu wählen • q=quit"
         )
 
         with Progress(
@@ -669,18 +669,18 @@ class SmartClusterPlayer:
             "[progress.percentage]{task.percentage:>3.0f}%",
             "•",
             TimeElapsedColumn(),
-            "remaining",
+            "verbleibend",
             TimeRemainingColumn(),
             console=console,
         ) as progress:
             if total_seconds is not None:
                 task = progress.add_task(
-                    "Playing: %s" % os.path.basename(song_path)[:30],
+                    "Spiele: %s" % os.path.basename(song_path)[:30],
                     total=total_seconds,
                 )
             else:
                 task = progress.add_task(
-                    "Playing: %s" % os.path.basename(song_path)[:30],
+                    "Spiele: %s" % os.path.basename(song_path)[:30],
                     total=100,
                 )
 
@@ -714,12 +714,12 @@ class SmartClusterPlayer:
 
                 time.sleep(0.2)
 
-    # ---------- Switch cluster / group ----------
+    # ---------- Gruppe wechseln ----------
 
     def skip_group_cluster(self):
         if self.current_cluster_id is not None:
             console.print(
-                "[yellow]Cluster %d will be skipped.[/yellow]" % self.current_cluster_id
+                "[yellow]Gruppe %d wird übersprungen.[/yellow]" % self.current_cluster_id
             )
             self.blocked_clusters.add(self.current_cluster_id)
         new_cid = self.pick_random_cluster()
@@ -740,21 +740,21 @@ def main():
             song_path, idx = player.get_next_song_similar()
 
         if song_path is None:
-            console.print("[red]No more tracks available. Session ends.[/red]")
+            console.print("[red]Keine Songs mehr verfügbar. Session endet.[/red]")
             break
 
         action = player.play_song_with_progress(song_path)
 
         if action == "quit":
             player.stop_audio()
-            console.print("[bold]Exiting player.[/bold]")
+            console.print("[bold]Beende Player.[/bold]")
             break
         elif action == "skip_group":
             player.stop_audio()
             if player.mode == "cluster":
                 next_song = player.skip_group_cluster()
                 if next_song is None:
-                    console.print("[red]No new cluster available.[/red]")
+                    console.print("[red]Keine neue Gruppe verfügbar.[/red]")
                     break
             else:
                 player.skip_group_similar()
