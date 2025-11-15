@@ -14,6 +14,8 @@ It supports two playback modes:
 
 The UI is fully responsive and optimized for mobile and desktop environments.
 
+There is also an CLI Version available, see extra file smart_player.
+
 ---
 
 ## ✨ Key Features
