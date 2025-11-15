@@ -187,7 +187,7 @@ http://<raspberry-pi-ip>:5000
 ### Required packages:
 ```bash
 sudo apt update
-sudo apt install vlc python3-vlc python3-pil
+sudo apt install vlc python3-vlc python3-pil python3-pandas python3-numpy python3-flask python3-pil
 ```
 
 ### Audio output selection:
