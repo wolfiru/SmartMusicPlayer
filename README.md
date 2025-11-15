@@ -97,8 +97,8 @@ SmartMusicPlayer/
 ├── web_player.py                 # Main Flask server + UI logic
 ├── analyze_and_cluster.py        # Audio analysis & clustering
 ├── presets.json                  # Mood preset definitions
-├── song_features_with_clusters.csv
 └── Music/                        # MP3 files
+   └── song_features_with_clusters.csv
 ```
 
 ---
