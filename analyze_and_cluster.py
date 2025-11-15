@@ -92,11 +92,13 @@ def main():
         console.print(f"[green]Existing feature file found:[/green] {OUTPUT_CSV}")
         try:
             existing_df = pd.read_csv(OUTPUT_CSV)
+
             if "path" in existing_df.columns:
-                # Normalisieren: immer nur Dateinamen als "Key" verwenden
-                existing_df["track_key"] = (
+                # Normalize: always use only the filename as key
+                existing_df["path"] = (
                     existing_df["path"].astype(str).apply(os.path.basename)
                 )
+                existing_df["track_key"] = existing_df["path"]
                 known_keys = set(existing_df["track_key"].tolist())
                 console.print(
                     f"Already known songs (by filename): [bold]{len(known_keys)}[/bold]"
@@ -123,11 +125,10 @@ def main():
         console.print("[red]No audio files found. Check the path![/red]")
         return
 
-    # Aktuelle Datei-"Keys" (Dateinamen) im Filesystem
+    # Current file "keys" (filenames) in the filesystem
     current_keys = {os.path.basename(p) for p in all_audio_files}
 
-    # Wenn wir ein bestehendes DF haben, alle Einträge löschen, deren Datei es
-    # nicht mehr gibt
+    # If we have an existing DF, remove entries whose file no longer exists
     if existing_df is not None and "track_key" in existing_df.columns:
         before = len(existing_df)
         existing_df = existing_df[existing_df["track_key"].isin(current_keys)].copy()
@@ -136,10 +137,10 @@ def main():
             console.print(
                 f"[yellow]Removed {removed} entries for missing files.[/yellow]"
             )
-        # known_keys neu setzen, falls sich etwas geändert hat
+        # known_keys refresh
         known_keys = set(existing_df["track_key"].tolist())
 
-    # Nur neue Dateien, die noch nicht in der CSV (per Dateiname) bekannt sind
+    # Only new files which are not in the CSV yet (by filename)
     new_audio_files = [
         p for p in all_audio_files
         if os.path.basename(p) not in known_keys
@@ -173,7 +174,7 @@ def main():
                 )
                 feats = extract_features(path)
                 if feats is not None:
-                    # WICHTIG: nur Dateiname speichern
+                    # IMPORTANT: store only filename
                     feats["path"] = os.path.basename(path)
                     rows_new.append(feats)
                 progress.advance(task)
@@ -187,7 +188,7 @@ def main():
 
     # 3) Build DataFrame: existing + new
     if existing_df is not None and not existing_df.empty:
-        # track_key ist nur Hilfsspalte – vor dem Speichern später entfernen
+        # track_key is just a helper column – remove before saving later
         if rows_new:
             df_new = pd.DataFrame(rows_new)
             df = pd.concat([existing_df, df_new], ignore_index=True)
@@ -201,7 +202,7 @@ def main():
             return
         df = pd.DataFrame(rows_new)
 
-    # Falls track_key noch drin ist: entfernen, wir brauchen nach außen nur 'path'
+    # If track_key still exists: drop it, we only need 'path' externally
     if "track_key" in df.columns:
         df = df.drop(columns=["track_key"])
 
@@ -226,6 +227,15 @@ def main():
 
     df["cluster_id"] = cluster_ids
     console.print("[green]Clustering completed.[/green]")
+
+    # 5b) Round float columns to reduce CSV size (without affecting result)
+    float_cols = df.select_dtypes(include=["float32", "float64"]).columns.tolist()
+    if float_cols:
+        df[float_cols] = df[float_cols].round(3)
+
+    # Ensure cluster_id is int
+    if "cluster_id" in df.columns:
+        df["cluster_id"] = df["cluster_id"].astype(int)
 
     # 6) Save results
     console.print(f"\n[bold cyan]Saving result to:[/bold cyan] {OUTPUT_CSV}")
