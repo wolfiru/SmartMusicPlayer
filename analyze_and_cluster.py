@@ -1,48 +1,3 @@
-"""
-Music Feature Extraction & Clustering Script
-
-This script scans a directory of audio files, extracts basic audio features,
-and groups the songs into clusters using KMeans.
-
-Main features:
-- Recursively searches MUSIC_DIR for audio files with extensions:
-  .mp3, .wav, .flac, .m4a
-- Extracts for each file:
-  - tempo (BPM)
-  - rms_mean (loudness / energy)
-  - spec_centroid_mean (brightness)
-  - 13 MFCC mean values (mfcc_1 ... mfcc_13)
-- Stores all features in a CSV file (song_features_with_clusters.csv)
-- Uses StandardScaler and KMeans to assign each song to a cluster
-- Incremental behavior:
-  - If the CSV already exists and contains a 'path' column,
-    only NEW audio files (not yet in the CSV) are analyzed.
-  - Existing feature rows are preserved and re-clustered together with new ones.
-
-Requirements (Python packages):
-- librosa
-- numpy
-- pandas
-- scikit-learn
-- rich
-
-Configuration:
-- Adjust MUSIC_DIR to point to your local music folder.
-- N_CLUSTERS controls how many clusters KMeans will create.
-
-Usage:
-- Run the script (for example):
-    python analyze_and_cluster_songs.py
-
-Output:
-- CSV file in MUSIC_DIR:
-    song_features_with_clusters.csv
-- Columns include:
-    path, tempo, rms_mean, spec_centroid_mean,
-    mfcc_1 ... mfcc_13, cluster_id
-- A cluster summary table is printed to the console.
-"""
-
 import os
 import time
 
@@ -131,16 +86,20 @@ def main():
 
     # 0) Load existing CSV if present
     existing_df = None
-    known_paths = set()
+    known_keys = set()
 
     if os.path.exists(OUTPUT_CSV):
         console.print(f"[green]Existing feature file found:[/green] {OUTPUT_CSV}")
         try:
             existing_df = pd.read_csv(OUTPUT_CSV)
             if "path" in existing_df.columns:
-                known_paths = set(existing_df["path"].astype(str).tolist())
+                # Normalisieren: immer nur Dateinamen als "Key" verwenden
+                existing_df["track_key"] = (
+                    existing_df["path"].astype(str).apply(os.path.basename)
+                )
+                known_keys = set(existing_df["track_key"].tolist())
                 console.print(
-                    f"Already known songs: [bold]{len(known_paths)}[/bold]"
+                    f"Already known songs (by filename): [bold]{len(known_keys)}[/bold]"
                 )
             else:
                 console.print(
@@ -164,8 +123,28 @@ def main():
         console.print("[red]No audio files found. Check the path![/red]")
         return
 
-    # Only new files not yet in CSV
-    new_audio_files = [p for p in all_audio_files if p not in known_paths]
+    # Aktuelle Datei-"Keys" (Dateinamen) im Filesystem
+    current_keys = {os.path.basename(p) for p in all_audio_files}
+
+    # Wenn wir ein bestehendes DF haben, alle Einträge löschen, deren Datei es
+    # nicht mehr gibt
+    if existing_df is not None and "track_key" in existing_df.columns:
+        before = len(existing_df)
+        existing_df = existing_df[existing_df["track_key"].isin(current_keys)].copy()
+        removed = before - len(existing_df)
+        if removed > 0:
+            console.print(
+                f"[yellow]Removed {removed} entries for missing files.[/yellow]"
+            )
+        # known_keys neu setzen, falls sich etwas geändert hat
+        known_keys = set(existing_df["track_key"].tolist())
+
+    # Nur neue Dateien, die noch nicht in der CSV (per Dateiname) bekannt sind
+    new_audio_files = [
+        p for p in all_audio_files
+        if os.path.basename(p) not in known_keys
+    ]
+
     console.print(f"Total audio files found: [bold]{total_files}[/bold]")
     console.print(f"Files to analyze: [bold green]{len(new_audio_files)}[/bold green]")
 
@@ -188,10 +167,14 @@ def main():
             task = progress.add_task("Analyzing new songs", total=len(new_audio_files))
 
             for i, path in enumerate(new_audio_files, start=1):
-                progress.update(task, description=f"Analyzing: {os.path.basename(path)[:40]}")
+                progress.update(
+                    task,
+                    description=f"Analyzing: {os.path.basename(path)[:40]}"
+                )
                 feats = extract_features(path)
                 if feats is not None:
-                    feats["path"] = path
+                    # WICHTIG: nur Dateiname speichern
+                    feats["path"] = os.path.basename(path)
                     rows_new.append(feats)
                 progress.advance(task)
 
@@ -204,6 +187,7 @@ def main():
 
     # 3) Build DataFrame: existing + new
     if existing_df is not None and not existing_df.empty:
+        # track_key ist nur Hilfsspalte – vor dem Speichern später entfernen
         if rows_new:
             df_new = pd.DataFrame(rows_new)
             df = pd.concat([existing_df, df_new], ignore_index=True)
@@ -216,6 +200,10 @@ def main():
             )
             return
         df = pd.DataFrame(rows_new)
+
+    # Falls track_key noch drin ist: entfernen, wir brauchen nach außen nur 'path'
+    if "track_key" in df.columns:
+        df = df.drop(columns=["track_key"])
 
     console.print(
         f"Feature frame size (total): [bold]{df.shape[0]} songs x {df.shape[1]} columns[/bold]"
