@@ -1,0 +1,162 @@
+[
+  {
+    "id": 1,
+    "name": "Autofahren",
+    "tempo": 65,
+    "energy": 70,
+    "brightness": 60,
+    "weight": 0.9
+  },
+  {
+    "id": 2,
+    "name": "Schlafen",
+    "tempo": 20,
+    "energy": 15,
+    "brightness": 20,
+    "weight": 0.8
+  },
+  {
+    "id": 3,
+    "name": "Sport",
+    "tempo": 85,
+    "energy": 90,
+    "brightness": 70,
+    "weight": 1.0
+  },
+  {
+    "id": 4,
+    "name": "Hintergrundmusik",
+    "tempo": 40,
+    "energy": 35,
+    "brightness": 30,
+    "weight": 0.7
+  },
+  {
+    "id": 5,
+    "name": "Dynamisch",
+    "tempo": 80,
+    "energy": 75,
+    "brightness": 75,
+    "weight": 1.0
+  },
+  {
+    "id": 6,
+    "name": "Entspannen",
+    "tempo": 35,
+    "energy": 25,
+    "brightness": 40,
+    "weight": 0.8
+  },
+  {
+    "id": 7,
+    "name": "Party",
+    "tempo": 90,
+    "energy": 95,
+    "brightness": 80,
+    "weight": 1.0
+  },
+  {
+    "id": 8,
+    "name": "Konzentrieren",
+    "tempo": 30,
+    "energy": 20,
+    "brightness": 25,
+    "weight": 0.85
+  },
+  {
+    "id": 9,
+    "name": "Stimmung heben",
+    "tempo": 70,
+    "energy": 80,
+    "brightness": 85,
+    "weight": 1.0
+  },
+  {
+    "id": 10,
+    "name": "Rainy Day",
+    "tempo": 45,
+    "energy": 30,
+    "brightness": 20,
+    "weight": 0.9
+  },
+  {
+    "id": 11,
+    "name": "Autobahn",
+    "tempo": 88,
+    "energy": 85,
+    "brightness": 65,
+    "weight": 1.0
+  },
+  {
+    "id": 12,
+    "name": "Night Drive",
+    "tempo": 75,
+    "energy": 65,
+    "brightness": 35,
+    "weight": 0.95
+  },
+  {
+    "id": 13,
+    "name": "Coding",
+    "tempo": 45,
+    "energy": 40,
+    "brightness": 35,
+    "weight": 0.85
+  },
+  {
+    "id": 14,
+    "name": "Yoga / Stretch",
+    "tempo": 30,
+    "energy": 25,
+    "brightness": 40,
+    "weight": 0.8
+  },
+  {
+    "id": 15,
+    "name": "80s Classics",
+    "tempo": 70,
+    "energy": 75,
+    "brightness": 80,
+    "weight": 0.9
+  },
+  {
+    "id": 16,
+    "name": "Family / Kids",
+    "tempo": 60,
+    "energy": 60,
+    "brightness": 90,
+    "weight": 0.8
+  },
+  {
+    "id": 17,
+    "name": "House Cleaning",
+    "tempo": 80,
+    "energy": 85,
+    "brightness": 75,
+    "weight": 0.95
+  },
+  {
+    "id": 18,
+    "name": "Romantic",
+    "tempo": 40,
+    "energy": 35,
+    "brightness": 30,
+    "weight": 0.85
+  },
+  {
+    "id": 19,
+    "name": "Morning Start",
+    "tempo": 55,
+    "energy": 60,
+    "brightness": 70,
+    "weight": 0.9
+  },
+  {
+    "id": 20,
+    "name": "Lounge / Café",
+    "tempo": 50,
+    "energy": 45,
+    "brightness": 50,
+    "weight": 0.85
+  }
+]
