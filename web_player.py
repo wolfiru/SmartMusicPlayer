@@ -56,214 +56,6 @@ class WebMusicPlayer:
     """
     Web-controlled player:
     - Local: VLC plays on the server
-    - Remote: Browser streams via /api/stream/<idx>
-    - Intelligent next-track choice
-    - Presets (mood / mode) from presets.json
-    - Theme colors extracted from cover images
-    """
-
-    def __init__(self, music_dir, csv_path):
-        self.music_dir = music_dir
-        self.csv_path = csv_path
-
-        if not os.path.exists(csv_path):
-            raise FileNotFoundError(f"CSV not found: {csv_path}")
-
-        df = pd.read_csv(csv_path)
-        if "cluster_id" not in df.columns:
-            raise ValueError("CSV has no column 'cluster_id'.")
-
-        df["cluster_id"] = df["cluster_id"].astype(int)
-
-        df["tempo_cat"] = df.get("tempo", pd.Series([None] * len(df))).apply(
-            tempo_category
-        )
-
-        # Energy / brightness categories
-        if "rms_mean" in df.columns:
-            q_low, q_high = df["rms_mean"].quantile([0.33, 0.66])
-            energy_low, energy_high = q_low, q_high
-        else:
-            energy_low = energy_high = None
-
-        if "spec_centroid_mean" in df.columns:
-            q_low_b, q_high_b = df["spec_centroid_mean"].quantile([0.33, 0.66])
-            bright_low, bright_high = q_low_b, q_high_b
-        else:
-            bright_low = bright_high = None
-
-        def energy_cat(val):
-            if pd.isna(val) or energy_low is None:
-                return "unknown"
-            if val < energy_low:
-                return "calm"
-            elif val < energy_high:
-                return "normal"
-            else:
-                return "powerful"
-
-        def bright_cat(val):
-            if pd.isna(val) or bright_low is None:
-                return "unknown"
-            if val < bright_low:
-                return "dark"
-            elif val < bright_high:
-                return "neutral"
-            else:
-                return "bright"
-
-        df["energy_cat"] = df.get("rms_mean", pd.Series([None] * len(df))).apply(
-            energy_cat
-        )
-        df["bright_cat"] = df.get("spec_centroid_mean", pd.Series([None] * len(df))).apply(
-            bright_cat
-        )
-
-        self.df = df.reset_index(drop=True)
-        self.n_songs = len(self.df)
-
-        # Features for similarity
-        self.feature_cols = [
-            c
-            for c in self.df.columns
-            if c in ("tempo", "rms_mean", "spec_centroid_mean") or c.startswith("mfcc_")
-        ]
-        if self.feature_cols:
-            feat_mat = self.df[self.feature_cols].copy()
-            feat_mat = feat_mat.fillna(feat_mat.mean())
-            self.feature_mean = feat_mat.mean(axis=0).values
-            self.feature_std = feat_mat.std(axis=0).values
-            self.feature_std[self.feature_std == 0] = 1.0
-            self.X_norm = (feat_mat.values - self.feature_mean) / self.feature_std
-
-            weights = []
-            for col in self.feature_cols:
-                if col == "tempo":
-                    weights.append(2.0)
-                elif col == "rms_mean":
-                    weights.append(2.0)
-                elif col == "spec_centroid_mean":
-                    weights.append(1.0)
-                elif col.startswith("mfcc_"):
-                    weights.append(0.3)
-                else:
-                    weights.append(1.0)
-            self.weights = np.array(weights)
-        else:
-            self.X_norm = None
-            self.weights = None
-
-        # Features for presets (Tempo/Energy/Brightness)
-        self.preset_cols = ["tempo", "rms_mean", "spec_centroid_mean"]
-        if all(c in self.df.columns for c in self.preset_cols):
-            preset_mat = self.df[self.preset_cols].copy()
-            preset_mat = preset_mat.fillna(preset_mat.mean())
-            self.preset_df = preset_mat
-            self.preset_min = preset_mat.min()
-            self.preset_max = preset_mat.max()
-            self.preset_mean = preset_mat.mean()
-            self.preset_std = preset_mat.std()
-            self.preset_std[self.preset_std == 0] = 1.0
-            self.preset_X_norm = (preset_mat - self.preset_mean) / self.preset_std
-        else:
-            self.preset_df = None
-            self.preset_min = None
-            self.preset_max = None
-            self.preset_mean = None
-            self.preset_std = None
-            self.preset_X_norm = None
-
-        # Playback state
-        self.current_idx = None
-        self.prev_idx = None
-        self.played = set()
-
-        # Mode
-        self.playback_mode = "local"  # "local" or "remote"
-
-        # Presets
-        self.presets = []
-        self.presets_by_id = {}
-        self.active_preset_id = None
-        self._load_presets()
-
-        # Cover + theme colors
-        self.cover_cache = {}       # song_idx -> (mime, data)
-        self.theme_color_cache = {} # song_idx -> "#rrggbb"
-
-        # VLC
-        if HAVE_VLC:
-            self.vlc_instance = vlc.Instance()
-            self.vlc_player = self.vlc_instance.media_player_new()
-        else:
-            self.vlc_instance = None
-            self.vlc_player = None
-
-        self.last_vlc_state = None
-        self.lock = threading.Lock()
-
-        # Autoplay thread (local only)
-        t = threading.Thread(target=self._autoadvance_loop, daemon=True)
-        t.start()
-
-import os
-import threading
-import time
-import json
-from io import BytesIO
-
-import numpy as np
-import pandas as pd
-from flask import Flask, jsonify, request, send_file, Response, abort
-
-# VLC
-try:
-    import vlc
-    HAVE_VLC = True
-except ImportError:
-    HAVE_VLC = False
-    vlc = None
-
-# Cover extractor
-try:
-    from mutagen.mp3 import MP3
-    from mutagen.id3 import ID3, APIC
-    HAVE_MUTAGEN = True
-except ImportError:
-    HAVE_MUTAGEN = False
-
-# Image processing for cover colors
-try:
-    from PIL import Image
-    HAVE_PIL = True
-except ImportError:
-    HAVE_PIL = False
-
-# ==== CONFIGURATION ====
-MUSIC_DIR = r"M:\Favoriten (Spotify)"  # fixed path
-CSV_PATH = os.path.join(MUSIC_DIR, "song_features_with_clusters.csv")
-
-# presets.json in the same folder as this script
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-PRESET_PATH = os.path.join(BASE_DIR, "presets.json")
-# =======================
-
-
-def tempo_category(bpm):
-    if pd.isna(bpm):
-        return "unknown"
-    if bpm < 90:
-        return "slow"
-    elif bpm < 120:
-        return "medium"
-    else:
-        return "fast"
-
-
-class WebMusicPlayer:
-    """
-    Web-controlled player:
-    - Local: VLC plays on the server
     - Remote: browser streams /api/stream/<idx>
     - Intelligent next-track selection
     - Presets (mood / mode) from presets.json
@@ -1001,7 +793,7 @@ body {
   display:flex;
   flex-direction:column;
   align-items:center;
-  justify-content:center;   /* vertically centered */
+  justify-content:center;
 }
 
 /* max width for desktop, still readable on mobile */
@@ -1022,7 +814,7 @@ body {
 
 /* Cover */
 #cover {
-  width: min(90vw, 360px);      /* nearly full-width on mobiles */
+  width: min(90vw, 360px);
   max-width: 360px;
   height: auto;
   aspect-ratio: 1 / 1;
@@ -1118,6 +910,35 @@ button:hover { opacity:0.9; }
 .label { color:#aaa; }
 .value { color:#fff; font-weight:bold; }
 
+/* Category tags */
+.tag {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 0.78rem;
+  background: #333;
+  color: #fff;
+  white-space: nowrap;
+}
+
+/* green: calm / slow / dark / high similarity */
+.tag-low {
+  background: #1b5e20;
+  color: #ffffff;
+}
+
+/* accent: normal / neutral / mid similarity */
+.tag-mid {
+  background: var(--accent);
+  color: var(--accentText);
+}
+
+/* red-ish: fast / powerful / bright / low similarity */
+.tag-high {
+  background: #b71c1c;
+  color: #ffffff;
+}
+
 /* Progress bar */
 .bar {
   width:100%;
@@ -1186,27 +1007,26 @@ footer {
         <div class="info-row">
           <span class="label">Tempo:</span>
           <span class="value">
-            <span id="tempo">-</span>
-            &nbsp;(<span id="tempo_cat">-</span>)
+            <span id="tempo_tag" class="tag">-</span>
           </span>
         </div>
         <div class="info-row">
           <span class="label">Energy:</span>
           <span class="value">
-            <span id="energy">-</span>
-            &nbsp;(<span id="energy_cat">-</span>)
+            <span id="energy_tag" class="tag">-</span>
           </span>
         </div>
         <div class="info-row">
           <span class="label">Brightness:</span>
           <span class="value">
-            <span id="bright">-</span>
-            &nbsp;(<span id="bright_cat">-</span>)
+            <span id="bright_tag" class="tag">-</span>
           </span>
         </div>
         <div class="info-row">
           <span class="label">Similarity:</span>
-          <span class="value" id="similarity">-</span>
+          <span class="value">
+            <span id="similarity_tag" class="tag">-</span>
+          </span>
         </div>
       </div>
 
@@ -1347,6 +1167,48 @@ function applyThemeColor(hex) {
   document.documentElement.style.setProperty('--accentText', text);
 }
 
+// tag helpers
+function setTag(el, text, title, levelClass) {
+  if (!el) return;
+  el.textContent = text || "-";
+  el.title = title || "";
+  el.className = "tag" + (levelClass ? " " + levelClass : "");
+}
+
+/**
+ * kind: "tempo" | "energy" | "bright" | "similarity"
+ */
+function getTagLevelClass(kind, cat, numeric) {
+  const c = (cat || "").toLowerCase();
+
+  if (kind === "tempo") {
+    if (c === "slow") return "tag-low";
+    if (c === "fast") return "tag-high";
+    return "tag-mid"; // medium/others
+  }
+
+  if (kind === "energy") {
+    if (c === "calm") return "tag-low";
+    if (c === "powerful") return "tag-high";
+    return "tag-mid"; // normal
+  }
+
+  if (kind === "bright") {
+    if (c === "dark") return "tag-low";
+    if (c === "bright") return "tag-high";
+    return "tag-mid"; // neutral
+  }
+
+  if (kind === "similarity") {
+    const p = typeof numeric === "number" ? numeric : 0;
+    if (p >= 38) return "tag-low";   // very similar -> green
+    if (p >= 20) return "tag-mid";   // medium -> accent
+    return "tag-high";               // low similarity -> red
+  }
+
+  return "";
+}
+
 async function fetchStatus() {
   try {
     const resp = await fetch('/api/status');
@@ -1366,16 +1228,20 @@ async function fetchStatus() {
       applyThemeColor(data.theme_color);
     }
 
-    if (!data.current_idx && data.current_idx !== 0) {
+    // reset state if nothing playing
+    if (data.current_idx === null || data.current_idx === undefined) {
       document.getElementById('titleTop').textContent = "-";
       document.getElementById('cluster').textContent = "-";
-      document.getElementById('tempo').textContent = "-";
-      document.getElementById('tempo_cat').textContent = "-";
-      document.getElementById('energy').textContent = "-";
-      document.getElementById('energy_cat').textContent = "-";
-      document.getElementById('bright').textContent = "-";
-      document.getElementById('bright_cat').textContent = "-";
-      document.getElementById('similarity').textContent = "-";
+
+      ['tempo_tag', 'energy_tag', 'bright_tag', 'similarity_tag'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) {
+          el.textContent = "-";
+          el.title = "";
+          el.className = "tag";
+        }
+      });
+
       document.getElementById('cover').src = "";
       document.getElementById('bg').style.backgroundImage = "none";
       lastCoverIdx = null;
@@ -1392,29 +1258,53 @@ async function fetchStatus() {
     document.getElementById('cluster').textContent =
       data.cluster_id !== null ? data.cluster_id : "-";
 
-    document.getElementById('tempo').textContent =
-      data.tempo !== null ? data.tempo.toFixed(1) + " BPM" : "-";
-    document.getElementById('tempo_cat').textContent = data.tempo_cat || "-";
-
-    document.getElementById('energy').textContent =
-      data.rms !== null ? data.rms.toFixed(4) : "-";
-    document.getElementById('energy_cat').textContent = data.energy_cat || "-";
-
-    document.getElementById('bright').textContent =
-      data.bright !== null ? data.bright.toFixed(1) : "-";
-    document.getElementById('bright_cat').textContent = data.bright_cat || "-";
-
-    if (data.similarity_percent !== null) {
-      document.getElementById('similarity').textContent =
-        data.similarity_percent.toFixed(1) +
-        "% (distance " +
-        data.similarity_dist.toFixed(3) +
-        ")";
+    // Tempo tag
+    const tempoTagEl = document.getElementById('tempo_tag');
+    if (data.tempo !== null && data.tempo !== undefined) {
+      const cls = getTagLevelClass('tempo', data.tempo_cat);
+      const title = data.tempo.toFixed(1) + " BPM";
+      const text = data.tempo_cat || 'n/a';
+      setTag(tempoTagEl, text, title, cls);
     } else {
-      document.getElementById('similarity').textContent = "n/a";
+      setTag(tempoTagEl, '-', '', '');
     }
 
-    if (data.current_idx !== null) {
+    // Energy tag (RMS)
+    const energyTagEl = document.getElementById('energy_tag');
+    if (data.rms !== null && data.rms !== undefined) {
+      const cls = getTagLevelClass('energy', data.energy_cat);
+      const title = data.rms.toFixed(4);
+      const text = data.energy_cat || 'n/a';
+      setTag(energyTagEl, text, title, cls);
+    } else {
+      setTag(energyTagEl, '-', '', '');
+    }
+
+    // Brightness tag
+    const brightTagEl = document.getElementById('bright_tag');
+    if (data.bright !== null && data.bright !== undefined) {
+      const cls = getTagLevelClass('bright', data.bright_cat);
+      const title = data.bright.toFixed(1);
+      const text = data.bright_cat || 'n/a';
+      setTag(brightTagEl, text, title, cls);
+    } else {
+      setTag(brightTagEl, '-', '', '');
+    }
+
+    // Similarity tag
+    const simTagEl = document.getElementById('similarity_tag');
+    if (data.similarity_percent !== null && data.similarity_percent !== undefined) {
+      const pct = data.similarity_percent;
+      const dist = data.similarity_dist;
+      const cls = getTagLevelClass('similarity', null, pct);
+      const text = pct.toFixed(1) + "%";
+      const title = "Similarity " + pct.toFixed(1) + "% (distance " + dist.toFixed(3) + ")";
+      setTag(simTagEl, text, title, cls);
+    } else {
+      setTag(simTagEl, 'n/a', '', '');
+    }
+
+    if (data.current_idx !== null && data.current_idx !== undefined) {
       if (data.current_idx !== lastCoverIdx) {
         const coverUrl = "/api/cover/" + data.current_idx + "?t=" + Date.now();
         document.getElementById('cover').src = coverUrl;
@@ -1429,7 +1319,10 @@ async function fetchStatus() {
     const audio = document.getElementById('audioPlayer');
 
     if (playbackMode === 'remote') {
-      if (data.current_idx !== null && data.current_idx !== lastSongIdx) {
+      if (data.current_idx !== null &&
+          data.current_idx !== undefined &&
+          data.current_idx !== lastSongIdx) {
+
         const streamUrl =
           "/api/stream/" + data.current_idx + "?t=" + Date.now();
         audio.src = streamUrl;
@@ -1453,7 +1346,7 @@ async function fetchStatus() {
         timeEl.textContent = "0:00 / 0:00";
       }
     } else {
-      if (data.length && data.position !== null) {
+      if (data.length && data.position !== null && data.position !== undefined) {
         const pct = Math.max(
           0,
           Math.min(100, (data.position / data.length) * 100)
@@ -1633,4 +1526,3 @@ def api_remote_ended():
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000, debug=False)
-
