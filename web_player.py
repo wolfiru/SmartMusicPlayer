@@ -868,6 +868,8 @@ button:hover { opacity:0.9; }
 .btn-toggle.active {
   background: var(--accent);
   color: var(--accentText);
+  border: 1px solid #00ff88;                 /* Rand explizit als Border */
+  box-shadow: 0 0 18px rgba(0, 255, 136, 0.4);  /* nur weicher Glow */
 }
 
 /* Presets */
@@ -891,9 +893,9 @@ button:hover { opacity:0.9; }
 .preset-button.active {
   background: var(--accent);
   color: var(--accentText);
-  border-color: var(--accent);
+  border: 1px solid #00ff88;                 /* Rand explizit als Border */
+  box-shadow: 0 0 18px rgba(0, 255, 136, 0.4);  /* nur weicher Glow */
 }
-
 /* Info */
 .info {
   margin-top:10px;
@@ -995,7 +997,8 @@ footer {
         <button id="btnRemote" class="btn-toggle" onclick="setMode('remote')">Remote (browser)</button>
       </div>
 
-      <audio id="audioPlayer" controls></audio>
+      <!-- <audio id="audioPlayer" controls></audio> -->
+	  <audio id="audioPlayer"></audio>
 
       <div id="presets" class="preset-container"></div>
 
@@ -1044,7 +1047,7 @@ footer {
   </div>
 
   <footer>
-    Smart Music Player (Raspberry Pi / PC)
+    Smart Music Player V0.9 (Raspberry Pi / PC)
   </footer>
 </div>
 
