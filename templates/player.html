@@ -1,0 +1,1073 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Smart Music Player</title>
+<style>
+:root {
+  --accent: #8ef;
+  --accentText: #000000;
+  --spacing-xs: 3px;
+  --spacing-sm: 6px;
+  --spacing-md: 10px;
+  --spacing-lg: 14px;
+  --spacing-xl: 20px;
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+  --radius-full: 999px;
+  --transition: 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html, body {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  overscroll-behavior: none;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  background: #000;
+  color: #eee;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Background + layout */
+#bg {
+  position: relative;
+  min-height: 100vh;
+  background: #111;
+  background-position: center center;
+  background-repeat: no-repeat;
+  background-size: cover;
+  display: flex;
+  flex-direction: column;
+  transition: background-image 0.6s ease;
+}
+
+/* Dark overlay with subtle gradient */
+#bg::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    to bottom,
+    rgba(0,0,0,0.75) 0%,
+    rgba(0,0,0,0.85) 50%,
+    rgba(0,0,0,0.9) 100%
+  );
+  pointer-events: none;
+}
+
+#content {
+  position: relative;
+  z-index: 1;
+  padding: var(--spacing-md);
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--spacing-md);
+  overflow-y: auto;
+  padding-top: max(var(--spacing-md), env(safe-area-inset-top));
+  padding-bottom: max(var(--spacing-md), env(safe-area-inset-bottom));
+}
+
+#inner {
+  width: 100%;
+  max-width: 960px;
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-md);
+  margin: 0 auto;
+}
+
+/* Hauptlayout: mobile = untereinander, Desktop = zwei Spalten */
+.layout-main {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-lg);
+}
+
+.layout-left,
+.layout-right {
+  width: 100%;
+}
+
+/* Track title */
+.track-title {
+  font-size: clamp(1.1rem, 3.5vw, 1.4rem);
+  font-weight: 700;
+  margin: 0 0 var(--spacing-sm) 0;
+  text-align: center;
+  color: #f5f5f5;
+  word-wrap: break-word;
+  line-height: 1.2;
+  text-shadow: 0 2px 8px rgba(0,0,0,0.5);
+  letter-spacing: -0.02em;
+}
+
+/* Cover container */
+.cover-container {
+  width: 100%;
+  max-width: min(70vw, 320px);
+  margin: 0 auto;
+  aspect-ratio: 1 / 1;
+  position: relative;
+}
+
+#cover {
+  width: 100%;
+  height: 100%;
+  background: #222;
+  display: block;
+  object-fit: cover;
+  border-radius: var(--radius-lg);
+  box-shadow:
+    0 20px 40px rgba(0,0,0,0.85),
+    0 0 0 1px rgba(255,255,255,0.05),
+    inset 0 1px 0 rgba(255,255,255,0.03);
+  transform: translateY(0) scale(1);
+  transition: all var(--transition);
+  will-change: transform;
+}
+
+#cover:hover {
+  transform: translateY(-6px) scale(1.02);
+  box-shadow:
+    0 28px 56px rgba(0,0,0,0.9),
+    0 0 0 1px rgba(255,255,255,0.08),
+    inset 0 1px 0 rgba(255,255,255,0.05);
+}
+
+/* Buttons */
+button {
+  margin: var(--spacing-xs);
+  padding: 8px 14px;
+  font-size: 13px;
+  font-weight: 600;
+  border-radius: var(--radius-full);
+  border: none;
+  cursor: pointer;
+  transition: all var(--transition);
+  position: relative;
+  overflow: hidden;
+  touch-action: manipulation;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+  min-height: 38px;
+}
+
+button::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: rgba(255,255,255,0.1);
+  opacity: 0;
+  transition: opacity var(--transition);
+}
+
+button:hover::before {
+  opacity: 1;
+}
+
+button:active {
+  transform: scale(0.96);
+}
+
+/* Haupt-Steuerbuttons (Start/Next/...) – halbtransparent */
+.btn-primary {
+  background: color-mix(in srgb, var(--accent) 35%, rgba(0,0,0,0.8));
+  color: var(--accentText);
+  border: 1px solid color-mix(in srgb, var(--accent) 45%, rgba(255,255,255,0.1));
+  box-shadow: 0 4px 10px rgba(0,0,0,0.5);
+}
+
+.btn-primary {
+  background: rgba(255, 255, 255, 0.06);  /* glasig */
+  color: #f7f7f7;                          /* fix hell, immer lesbar */
+  border-radius: var(--radius-full);
+  border: 1px solid color-mix(in srgb, var(--accent) 60%, rgba(255,255,255,0.0));
+  box-shadow:
+    0 3px 10px rgba(0,0,0,0.6),
+    0 0 8px color-mix(in srgb, var(--accent) 25%, transparent);
+}
+
+.btn-primary:hover {
+  background: rgba(255, 255, 255, 0.10);
+  box-shadow:
+    0 4px 12px rgba(0,0,0,0.7),
+    0 0 10px color-mix(in srgb, var(--accent) 35%, transparent);
+}
+
+
+
+/* Jump / Pause / Stop – dunkler, aber wirklich glasig */
+.btn-secondary {
+  background: rgba(0, 0, 0, 0.35);  /* deutlich transparenter als vorher */
+  color: #f0f0f0;
+  border-radius: var(--radius-full);
+  border: 1px solid rgba(255,255,255,0.14);
+  box-shadow: 0 3px 9px rgba(0,0,0,0.55);
+}
+
+.btn-secondary:hover {
+  background: rgba(0, 0, 0, 0.5);   /* beim Hover etwas weniger transparent */
+  border-color: rgba(255,255,255,0.2);
+}
+
+
+/* Mode toggle */
+.mode-toggle {
+  display: flex;
+  justify-content: center;
+  gap: var(--spacing-sm);
+  flex-wrap: wrap;
+  padding: var(--spacing-sm) 0;
+}
+
+.btn-toggle {
+  background: #333;
+  color: #fff;
+  padding: 8px 16px;
+  font-size: 12px;
+  border: 2px solid transparent;
+  min-width: 140px;
+}
+
+.btn-toggle.active {
+  background: linear-gradient(
+    135deg,
+    color-mix(in srgb, var(--accent) 70%, #111),
+    color-mix(in srgb, var(--accent) 40%, #000)
+  );
+  color: var(--accentText);
+  border: 1px solid rgba(0, 255, 136, 0.6);
+  box-shadow:
+    0 0 10px rgba(0, 255, 136, 0.35),
+    0 3px 10px rgba(0,0,0,0.45);
+}
+
+/* Presets */
+/* Basis: 2 Spalten */
+.preset-container {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--spacing-xs);
+  width: 100%;
+}
+
+/* Ab 900px: fix 3 Spalten */
+@media (min-width: 900px) {
+  .preset-container {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+.preset-button {
+  background: rgba(255, 255, 255, 0.04);      /* durchsichtiges Grau */
+  color: #eee;
+  border-radius: var(--radius-md);
+  padding: 6px 10px;
+  font-size: 12px;
+  font-weight: 500;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  cursor: pointer;
+  transition: all var(--transition);
+  text-align: center;
+  white-space: normal;
+  line-height: 1.2;
+  overflow: hidden;
+  max-height: 2.6em; /* ca. 2 Zeilen */
+  box-shadow: 0 4px 10px rgba(0,0,0,0.35);
+}
+
+.preset-button:hover {
+  background: rgba(255, 255, 255, 0.08);      /* etwas weniger transparent beim Hover */
+  border-color: rgba(255, 255, 255, 0.18);
+  transform: translateY(-1px);
+  box-shadow: 0 6px 14px rgba(0,0,0,0.45);
+}
+
+.preset-button.active {
+  /* etwas mehr Transparenz in der Fläche */
+  background: color-mix(in srgb, var(--accent) 16%, rgba(0,0,0,0.75));
+  color: #f7f7f7;
+
+  /* Rahmen leicht grünt, aber nicht mehr Vollgas */
+  border: 2px solid rgba(0, 255, 136, 0.65);
+
+  /* dezenter Glow: weniger Stärke, mehr Transparenz */
+  box-shadow:
+    0 0 10px rgba(0, 255, 136, 0.35),
+    0 0 22px rgba(0, 255, 136, 0.25),
+    0 3px 10px rgba(0, 0, 0, 0.6);
+
+  transform: translateY(-1px);
+}
+
+
+
+
+/* Tags – dezenter */
+.tag {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 3px 8px;
+  border-radius: var(--radius-full);
+  font-size: 0.78rem;
+  font-weight: 500;
+  background: rgba(255,255,255,0.04);
+  color: #eee;
+  white-space: nowrap;
+  box-shadow: none;
+  border: 1px solid rgba(255,255,255,0.06);
+}
+
+.tag-low {
+  background: rgba(76, 175, 80, 0.14);
+  border-color: rgba(76, 175, 80, 0.35);
+  color: #cde9cf;
+  box-shadow: 0 0 6px rgba(76, 175, 80, 0.25);
+}
+
+.tag-mid {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+  color: #e6f8ff;
+  box-shadow: 0 0 6px color-mix(in srgb, var(--accent) 30%, transparent);
+}
+
+.tag-high {
+  background: rgba(244, 67, 54, 0.14);
+  border-color: rgba(244, 67, 54, 0.4);
+  color: #ffd7d7;
+  box-shadow: 0 0 6px rgba(244, 67, 54, 0.3);
+}
+
+/* Mood card (kompakt) */
+.mood-card {
+  background: rgba(0, 0, 0, 0.35);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  border-radius: var(--radius-md);
+  padding: 6px 10px;
+
+  /* Rahmen in dezenter Accent-Farbe */
+  border: 1px solid color-mix(in srgb, var(--accent) 20%, rgba(255,255,255,0.08));
+
+  box-shadow: 0 8px 18px rgba(0,0,0,0.45);
+}
+
+
+.mood-card-header {
+  display: flex;
+  flex-direction: column;
+  margin-bottom: 4px;
+}
+
+.mood-card-title {
+  font-size: 0.78rem;
+  letter-spacing: 0.11em;
+  text-transform: uppercase;
+  color: #b8b8b8;
+  font-weight: 600;
+}
+
+.mood-card-subtitle {
+  font-size: 0.7rem;
+  color: #777;
+}
+
+.mood-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+  margin-top: 2px;
+}
+
+.mood-item {
+  background: rgba(255,255,255,0.02);
+  border-radius: var(--radius-sm);
+  padding: 4px 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  border: 1px solid rgba(255,255,255,0.04);
+}
+
+.mood-label {
+  font-size: 0.7rem;
+  color: #aaa;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+}
+
+.mood-tag {
+  align-self: flex-start;
+  font-size: 0.78rem;
+  line-height: 1.2;
+  padding: 3px 8px;
+}
+
+/* Progress bar */
+.progress-container {
+  background: rgba(0,0,0,0.3);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  border-radius: var(--radius-md);
+  padding: var(--spacing-sm) var(--spacing-md);
+
+  /* auch hier Accent-Rand, aber dezent */
+  border: 1px solid color-mix(in srgb, var(--accent) 20%, rgba(255,255,255,0.05));
+}
+
+
+.bar {
+  width: 100%;
+  height: 8px;
+  background: rgba(255,255,255,0.1);
+  border-radius: var(--radius-full);
+
+  /* Glow darf raus */
+  overflow: visible;
+
+  box-shadow: inset 0 2px 4px rgba(0,0,0,0.3);
+  position: relative;
+}
+
+
+.bar-inner {
+  height: 100%;
+  width: 0%;
+  border-radius: inherit;
+  position: relative;
+
+  /* Verlauf aus der aktuellen Accent-Farbe (Cover-Farbe) */
+  background: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--accent) 20%, #000),
+    color-mix(in srgb, var(--accent) 80%, #fff)
+  );
+
+  transition: width 0.3s ease;
+
+  /* dezenter, „enger“ Glow um den Balken */
+  box-shadow:
+    0 0 6px  color-mix(in srgb, var(--accent) 35%, transparent),
+    0 0 12px color-mix(in srgb, var(--accent) 22%, transparent);
+}
+
+/* kleiner Glow-Punkt an der Spitze des Fortschritts */
+.bar-inner::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  right: 0;
+  transform: translate(50%, -50%);
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+
+  /* deutlich hellerer Kern + weicher Glow außen */
+  background: radial-gradient(
+    circle,
+    color-mix(in srgb, var(--accent) 30%, #ffffff) 0%,   /* fast weißer Kern */
+    color-mix(in srgb, var(--accent) 80%, transparent) 55%,
+    transparent 100%
+  );
+
+  box-shadow:
+    0 0 8px  color-mix(in srgb, var(--accent) 65%, transparent),
+    0 0 18px color-mix(in srgb, var(--accent) 40%, transparent);
+
+  pointer-events: none;
+}
+
+
+.time-display {
+  font-size: 0.85rem;
+  color: color-mix(in srgb, var(--accent) 70%, #d0d0d0); /* Accent-Farbe, leicht aufgehellt */
+  margin-top: 4px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  font-weight: 500;
+  text-shadow: 0 0 4px color-mix(in srgb, var(--accent) 30%, transparent);
+}
+
+
+/* Audio player */
+#audioPlayer {
+  width: 100%;
+  margin-top: var(--spacing-sm);
+  display: none;
+}
+
+/* Controls grid */
+.controls {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+  gap: var(--spacing-xs);
+  width: 100%;
+}
+
+/* Footer */
+footer {
+  position: relative;
+  z-index: 1;
+  flex: 0 0 auto;
+  background: rgba(0,0,0,0.85);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  color: #999;
+  font-size: 0.75rem;
+  text-align: center;
+  padding: var(--spacing-sm);
+  border-top: 1px solid rgba(255,255,255,0.05);
+}
+
+/* Responsive */
+@media (max-width: 640px) {
+  :root {
+    --spacing-md: 8px;
+    --spacing-lg: 12px;
+  }
+
+  .track-title {
+    font-size: clamp(1rem, 4.5vw, 1.3rem);
+  }
+
+  button {
+    font-size: 12px;
+    padding: 7px 12px;
+  }
+
+  .controls {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .preset-container {
+    grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+  }
+  
+  .cover-container {
+    max-width: min(65vw, 260px);
+  }
+}
+
+/* Ab Desktop: zwei Spalten */
+@media (min-width: 900px) {
+  .layout-main {
+    flex-direction: row;
+    justify-content: center;      /* Gesamtblock zentriert */
+    align-items: center;
+    gap: 72px;                    /* deutlich größerer Abstand in der Mitte */
+  }
+
+  .layout-left {
+    flex: 0 0 340px;              /* leicht schmäler, damit mehr Platz für Abstand bleibt */
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+  }
+
+  .layout-right {
+    flex: 0 0 380px;              /* ebenfalls etwas schmäler */
+    display: flex;
+    flex-direction: column;
+    gap: 14px;                    /* mehr Luft zwischen den Elementen rechts */
+  }
+
+  .track-title {
+    text-align: center;
+  }
+
+  .mode-toggle {
+    justify-content: flex-start;
+  }
+}
+
+
+
+/* Loading state */
+.loading {
+  opacity: 0.6;
+  pointer-events: none;
+}
+
+/* Reduced motion */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+</style>
+</head>
+<body>
+<div id="bg">
+  <div id="content">
+    <div id="inner">
+      <div class="layout-main">
+        <!-- LINKS: Titel + Cover -->
+        <div class="layout-left">
+          <h1 id="titleTop" class="track-title">-</h1>
+          <div class="cover-container">
+            <img id="cover" src="" alt="Album Cover">
+          </div>
+        </div>
+
+        <!-- RECHTS: Mode, Presets, Mood, Progress, Controls -->
+        <div class="layout-right">
+          <div class="mode-toggle">
+            <button id="btnLocal" class="btn-toggle" onclick="setMode('local')">
+              🎵 Local (VLC)
+            </button>
+            <button id="btnRemote" class="btn-toggle active" onclick="setMode('remote')">
+              🌐 Remote (Browser)
+            </button>
+          </div>
+
+          <audio id="audioPlayer"></audio>
+
+          <div id="presets" class="preset-container"></div>
+
+          <div class="mood-card">
+            <div class="mood-card-header">
+              <span class="mood-card-title">Track Mood</span>
+              <span class="mood-card-subtitle">Tempo • Energy • Brightness • Match</span>
+            </div>
+            <div class="mood-grid">
+              <div class="mood-item">
+                <span class="mood-label">Tempo</span>
+                <span id="tempo_tag" class="tag mood-tag">-</span>
+              </div>
+              <div class="mood-item">
+                <span class="mood-label">Energy</span>
+                <span id="energy_tag" class="tag mood-tag">-</span>
+              </div>
+              <div class="mood-item">
+                <span class="mood-label">Brightness</span>
+                <span id="bright_tag" class="tag mood-tag">-</span>
+              </div>
+              <div class="mood-item">
+                <span class="mood-label">Similarity</span>
+                <span id="similarity_tag" class="tag mood-tag">-</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="progress-container">
+            <div class="bar">
+              <div class="bar-inner" id="progress"></div>
+            </div>
+            <div class="time-display" id="timepos">0:00 / 0:00</div>
+          </div>
+
+          <div class="controls">
+            <button class="btn-primary" onclick="sendCommand('start')">
+              ▶️ Start
+            </button>
+            <button class="btn-primary" onclick="sendCommand('next')">
+              ⏭️ Next
+            </button>
+            <button class="btn-secondary" onclick="sendCommand('big_jump')">
+              ⏩ Jump
+            </button>
+            <button class="btn-secondary" onclick="sendCommand('pause')">
+              ⏯️ Pause
+            </button>
+            <button class="btn-secondary" onclick="sendCommand('stop')">
+              ⏹️ Stop
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <footer>
+    Smart Music Player V1.0 • Optimized for all devices
+  </footer>
+</div>
+
+<script>
+let lastCoverIdx = null;
+let playbackMode = 'remote';
+let lastSongIdx = null;
+let presets = [];
+let activePresetId = null;
+
+function updateModeUI() {
+  const btnLocal = document.getElementById('btnLocal');
+  const btnRemote = document.getElementById('btnRemote');
+  const audio = document.getElementById('audioPlayer');
+
+  if (playbackMode === 'remote') {
+    btnRemote.classList.add('active');
+    btnLocal.classList.remove('active');
+    audio.style.display = 'block';
+  } else {
+    btnLocal.classList.add('active');
+    btnRemote.classList.remove('active');
+    audio.style.display = 'none';
+  }
+}
+
+function renderPresets() {
+  const container = document.getElementById('presets');
+  container.innerHTML = '';
+  if (!presets || presets.length === 0) {
+    const span = document.createElement('span');
+    span.textContent = 'No presets loaded.';
+    span.style.color = '#777';
+    span.style.gridColumn = '1 / -1';
+    span.style.textAlign = 'center';
+    container.appendChild(span);
+    return;
+  }
+  presets.forEach(p => {
+    const btn = document.createElement('button');
+    btn.className = 'preset-button';
+    btn.textContent = p.name;
+    btn.onclick = () => selectPreset(p.id);
+    if (activePresetId === p.id) {
+      btn.classList.add('active');
+    }
+    container.appendChild(btn);
+  });
+}
+
+async function loadPresets() {
+  try {
+    const resp = await fetch('api/presets');
+    const data = await resp.json();
+    presets = data.presets || [];
+    activePresetId = data.active_id || null;
+    renderPresets();
+  } catch (e) {
+    console.error(e);
+  }
+}
+
+async function selectPreset(id) {
+  try {
+    const resp = await fetch('api/preset', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({id})
+    });
+    const data = await resp.json();
+    activePresetId = data.active_id;
+    presets = data.presets || presets;
+    renderPresets();
+    setTimeout(fetchStatus, 300);
+  } catch (e) {
+    console.error(e);
+  }
+}
+
+async function setMode(mode) {
+  playbackMode = mode;
+  updateModeUI();
+  try {
+    await fetch('api/mode', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({mode})
+    });
+  } catch (e) {
+    console.error(e);
+  }
+}
+
+function prettyTitle(filename) {
+  if (!filename) return "-";
+  let name = filename;
+  if (name.toLowerCase().endsWith('.mp3')) {
+    name = name.slice(0, -4);
+  }
+  name = name.replace(/^\\s*\\d+\\s*[-._]\\s*/, '');
+  return name;
+}
+
+function applyThemeColor(hex) {
+  if (!hex) return;
+  const m = /^#?([0-9a-fA-F]{6})$/.exec(hex);
+  if (!m) return;
+  const intVal = parseInt(m[1], 16);
+  const r = (intVal >> 16) & 255;
+  const g = (intVal >> 8) & 255;
+  const b = intVal & 255;
+  const lum = (0.2126*r + 0.7152*g + 0.0722*b) / 255;
+  const text = lum < 0.5 ? '#ffffff' : '#000000';
+  document.documentElement.style.setProperty('--accent', '#' + m[1]);
+  document.documentElement.style.setProperty('--accentText', text);
+}
+
+function setTag(el, text, title, levelClass) {
+  if (!el) return;
+  el.textContent = text || "-";
+  el.title = title || "";
+  el.className = "tag" + (levelClass ? " " + levelClass : "");
+}
+
+function getTagLevelClass(kind, cat, numeric) {
+  const c = (cat || "").toLowerCase();
+
+  if (kind === "tempo") {
+    if (c === "slow") return "tag-low";
+    if (c === "fast") return "tag-high";
+    return "tag-mid";
+  }
+
+  if (kind === "energy") {
+    if (c === "calm") return "tag-low";
+    if (c === "powerful") return "tag-high";
+    return "tag-mid";
+  }
+
+  if (kind === "bright") {
+    if (c === "dark") return "tag-low";
+    if (c === "bright") return "tag-high";
+    return "tag-mid";
+  }
+
+  if (kind === "similarity") {
+    const p = typeof numeric === "number" ? numeric : 0;
+    if (p >= 34) return "tag-low";
+    if (p >= 19) return "tag-mid";
+    return "tag-high";
+  }
+
+  return "";
+}
+
+async function fetchStatus() {
+  try {
+    const resp = await fetch('api/status');
+    const data = await resp.json();
+
+    if (data.mode && data.mode !== playbackMode) {
+      playbackMode = data.mode;
+      updateModeUI();
+    }
+
+    if ('active_preset_id' in data) {
+      activePresetId = data.active_preset_id;
+      renderPresets();
+    }
+
+    if (data.theme_color) {
+      applyThemeColor(data.theme_color);
+    }
+
+    if (data.current_idx === null || data.current_idx === undefined) {
+      document.getElementById('titleTop').textContent = "-";
+
+      ['tempo_tag', 'energy_tag', 'bright_tag', 'similarity_tag'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) {
+          el.textContent = "-";
+          el.title = "";
+          el.className = "tag";
+        }
+      });
+
+      document.getElementById('cover').src = "";
+      document.getElementById('bg').style.backgroundImage = "none";
+      lastCoverIdx = null;
+      lastSongIdx = null;
+      document.getElementById('progress').style.width = "0%";
+      document.getElementById('timepos').textContent = "0:00 / 0:00";
+      return;
+    }
+
+    const niceName = prettyTitle(data.current_file || "");
+    document.getElementById('titleTop').textContent = niceName || "-";
+
+    const tempoTagEl = document.getElementById('tempo_tag');
+    if (data.tempo !== null && data.tempo !== undefined) {
+      const cls = getTagLevelClass('tempo', data.tempo_cat);
+      const title = data.tempo.toFixed(1) + " BPM";
+      const text = data.tempo_cat || 'n/a';
+      setTag(tempoTagEl, text, title, cls);
+    } else {
+      setTag(tempoTagEl, '-', '', '');
+    }
+
+    const energyTagEl = document.getElementById('energy_tag');
+    if (data.rms !== null && data.rms !== undefined) {
+      const cls = getTagLevelClass('energy', data.energy_cat);
+      const title = data.rms.toFixed(4);
+      const text = data.energy_cat || 'n/a';
+      setTag(energyTagEl, text, title, cls);
+    } else {
+      setTag(energyTagEl, '-', '', '');
+    }
+
+    const brightTagEl = document.getElementById('bright_tag');
+    if (data.bright !== null && data.bright !== undefined) {
+      const cls = getTagLevelClass('bright', data.bright_cat);
+      const title = data.bright.toFixed(1);
+      const text = data.bright_cat || 'n/a';
+      setTag(brightTagEl, text, title, cls);
+    } else {
+      setTag(brightTagEl, '-', '', '');
+    }
+
+    const simTagEl = document.getElementById('similarity_tag');
+    if (data.similarity_percent !== null && data.similarity_percent !== undefined) {
+      const pct = data.similarity_percent;
+      const dist = data.similarity_dist;
+      const cls = getTagLevelClass('similarity', null, pct);
+      const text = pct.toFixed(1) + "%";
+      const title = "Similarity " + pct.toFixed(1) + "% (distance " + dist.toFixed(3) + ")";
+      setTag(simTagEl, text, title, cls);
+    } else {
+      setTag(simTagEl, 'n/a', '', '');
+    }
+
+    if (data.current_idx !== null && data.current_idx !== undefined) {
+      if (data.current_idx !== lastCoverIdx) {
+        const coverUrl = "api/cover/" + data.current_idx + "?t=" + Date.now();
+        document.getElementById('cover').src = coverUrl;
+        document.getElementById('bg').style.backgroundImage =
+          "url('" + coverUrl + "')";
+        lastCoverIdx = data.current_idx;
+      }
+    }
+
+    const progressEl = document.getElementById('progress');
+    const timeEl = document.getElementById('timepos');
+    const audio = document.getElementById('audioPlayer');
+
+    if (playbackMode === 'remote') {
+      if (data.current_idx !== null &&
+          data.current_idx !== undefined &&
+          data.current_idx !== lastSongIdx) {
+
+        const streamUrl =
+          "api/stream/" + data.current_idx + "?t=" + Date.now();
+        audio.src = streamUrl;
+        audio.dataset.currentIdx = data.current_idx;
+        lastSongIdx = data.current_idx;
+        if (data.playing) {
+          audio.play().catch(e => console.error(e));
+        }
+      }
+
+      if (!isNaN(audio.duration) && audio.duration > 0) {
+        const pct = Math.max(
+          0,
+          Math.min(100, (audio.currentTime / audio.duration) * 100)
+        );
+        progressEl.style.width = pct + "%";
+        timeEl.textContent =
+          formatTime(audio.currentTime) + " / " + formatTime(audio.duration);
+      } else {
+        progressEl.style.width = "0%";
+        timeEl.textContent = "0:00 / 0:00";
+      }
+    } else {
+      if (data.length && data.position !== null && data.position !== undefined) {
+        const pct = Math.max(
+          0,
+          Math.min(100, (data.position / data.length) * 100)
+        );
+        progressEl.style.width = pct + "%";
+        timeEl.textContent =
+          formatTime(data.position) + " / " + formatTime(data.length);
+      } else {
+        progressEl.style.width = "0%";
+        timeEl.textContent = "0:00 / 0:00";
+      }
+    }
+  } catch (e) {
+    console.error(e);
+  }
+}
+
+function formatTime(sec) {
+  sec = Math.floor(sec || 0);
+  const m = Math.floor(sec / 60);
+  const s = sec % 60;
+  return m + ":" + (s < 10 ? "0" + s : s);
+}
+
+async function sendCommand(action) {
+  const audio = document.getElementById('audioPlayer');
+
+  if (playbackMode === 'remote' && action === 'pause') {
+    if (audio.paused) {
+      audio.play().catch(e => console.error(e));
+    } else {
+      audio.pause();
+    }
+    return;
+  }
+
+  if (playbackMode === 'remote' && action === 'stop') {
+    audio.pause();
+    audio.currentTime = 0;
+  }
+
+  try {
+    await fetch('api/command', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({action})
+    });
+    setTimeout(fetchStatus, 300);
+  } catch (e) {
+    console.error(e);
+  }
+}
+
+async function onAudioEnded() {
+  if (playbackMode !== 'remote') return;
+  try {
+    const resp = await fetch('api/remote_ended', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'}
+    });
+    const data = await resp.json();
+    if (data.idx !== null && data.idx !== undefined) {
+      const audio = document.getElementById('audioPlayer');
+      const streamUrl =
+        "api/stream/" + data.idx + "?t=" + Date.now();
+      audio.src = streamUrl;
+      audio.dataset.currentIdx = data.idx;
+      lastSongIdx = data.idx;
+      audio.play().catch(e => console.error(e));
+    }
+  } catch (e) {
+    console.error(e);
+  }
+}
+
+window.addEventListener('load', () => {
+  const audio = document.getElementById('audioPlayer');
+  audio.addEventListener('ended', onAudioEnded);
+  updateModeUI();
+  loadPresets();
+});
+
+setInterval(fetchStatus, 1000);
+fetchStatus();
+</script>
+</body>
+</html>
