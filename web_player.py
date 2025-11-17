@@ -6,7 +6,7 @@ from io import BytesIO
 
 import numpy as np
 import pandas as pd
-from flask import Flask, jsonify, request, send_file, Response, abort
+from flask import Flask, jsonify, request, send_file, Response, abort, render_template
 
 # VLC
 try:
@@ -32,8 +32,13 @@ except ImportError:
     HAVE_PIL = False
 
 # ==== CONFIGURATION ====
-MUSIC_DIR = r"M:\Favoriten (Spotify)"  # fixed path
+MUSIC_DIR = r"/mnt/musik/Favoriten (Spotify)"  # fixed path
 CSV_PATH = os.path.join(MUSIC_DIR, "song_features_with_clusters.csv")
+
+# Default-Output:
+#   "Streaming"  -> Browser (remote)
+#   "Local"      -> VLC on Server
+DEFAULT_OUTPUT = "Streaming"
 
 # presets.json in the same folder as this script
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -56,7 +61,7 @@ class WebMusicPlayer:
     """
     Web-controlled player:
     - Local: VLC plays on the server
-    - Remote: browser streams /api/stream/<idx>
+    - Remote: browser streams api/stream/<idx>
     - Intelligent next-track selection
     - Presets (mood / mode) from presets.json
     - Theme colors from the cover
@@ -74,6 +79,18 @@ class WebMusicPlayer:
             raise ValueError("CSV has no column 'cluster_id'.")
 
         df["cluster_id"] = df["cluster_id"].astype(int)
+		
+		# Pfade aus dem CSV bereinigen:
+        # - Windows-Backslashes in normale Separatoren umwandeln
+        # - nur den Dateinamen behalten (M:\Favoriten (Spotify)\... -> CYREES - ...mp3)
+        if "path" not in df.columns:
+            raise ValueError("CSV has no column 'path'.")
+
+        df["path"] = (
+            df["path"]
+            .astype(str)
+            .apply(lambda p: os.path.basename(p.replace("\\", os.sep)))
+        )
 
         df["tempo_cat"] = df.get("tempo", pd.Series([None] * len(df))).apply(
             tempo_category
@@ -178,8 +195,16 @@ class WebMusicPlayer:
         self.prev_idx = None
         self.played = set()
 
-        # Mode
-        self.playback_mode = "local"  # "local" or "remote"
+
+        # Defaultmode aus Config ableiten
+        mode_cfg = (DEFAULT_OUTPUT or "").strip().lower()
+        if mode_cfg in ("streaming", "remote", "browser"):
+            self.playback_mode = "remote"
+        else:
+            self.playback_mode = "local"
+
+        print(f"[INFO] Default playback mode: {self.playback_mode}")
+
 
         # Presets
         self.presets = []
@@ -277,7 +302,6 @@ class WebMusicPlayer:
     # ---------- Similarity logic ----------
 
     def _choose_next_index_generic(self, big_jump=False):
-        """Standard similarity (without preset)."""
         if self.X_norm is None or self.weights is None:
             remaining = [i for i in range(self.n_songs) if i not in self.played]
             if not remaining:
@@ -289,9 +313,16 @@ class WebMusicPlayer:
         if not remaining:
             return None
 
+        # Erster Track: komplett zufällig aus allen verbleibenden
         if self.current_idx is None:
             return int(np.random.choice(remaining))
 
+        # Ab dem zweiten Track: mit einer gewissen Wahrscheinlichkeit komplett zufällig
+        # -> bringt mehr Durchmischung, statt immer nur "stark ähnliche" Songs.
+        if np.random.rand() < 0.2:  # 20% reine "Exploration"
+            return int(np.random.choice(remaining))
+
+        # Bisherige Similarity-Logik
         v_cur = self.X_norm[self.current_idx]
         X_rem = self.X_norm[remaining]
 
@@ -326,6 +357,7 @@ class WebMusicPlayer:
         probs = inv / inv.sum() if inv.sum() > 0 else np.ones_like(inv) / len(inv)
         rel_choice = np.random.choice(len(cand), p=probs)
         return int(sorted_idx[cand[rel_choice]])
+
 
     def _choose_next_index_preset(self):
         """
@@ -741,704 +773,9 @@ player = WebMusicPlayer(MUSIC_DIR, CSV_PATH)
 
 @app.route("/")
 def index():
-    html = """
-<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8">
-<title>Smart Music Player</title>
-<style>
-:root {
-  --accent: #8ef;
-  --accentText: #000000;
-}
+    return render_template("player.html")
 
-html, body {
-  height: 100%;
-  margin: 0;
-  padding: 0;
-}
-body {
-  font-family: sans-serif;
-  background:#000;
-  color:#eee;
-}
 
-/* Background + layout */
-#bg {
-  position: relative;
-  min-height: 100vh;
-  background:#111;
-  background-position: center center;
-  background-repeat: no-repeat;
-  background-size: cover;
-  display:flex;
-  flex-direction:column;
-}
-
-/* Dark overlay */
-#bg::before {
-  content: "";
-  position: absolute;
-  inset: 0;
-  background: rgba(0,0,0,0.8);
-  pointer-events: none;
-}
-
-#content {
-  position: relative;
-  z-index: 1;
-  padding: 16px;
-  flex: 1 1 auto;
-  display:flex;
-  flex-direction:column;
-  align-items:center;
-  justify-content:center;
-}
-
-/* max width for desktop, still readable on mobile */
-#inner {
-  width: 100%;
-  max-width: 640px;
-}
-
-/* Track title */
-.track-title {
-  font-size: 1.4rem;
-  font-weight: 600;
-  margin: 0 0 12px 0;
-  text-align: center;
-  color:#f5f5f5;
-  word-wrap: break-word;
-}
-
-/* Cover */
-#cover {
-  width: min(90vw, 360px);
-  max-width: 360px;
-  height: auto;
-  aspect-ratio: 1 / 1;
-  background:#222;
-  display:block;
-  margin:0 auto 16px auto;
-  object-fit:cover;
-  border-radius: 18px;
-  box-shadow:
-    0 18px 35px rgba(0,0,0,0.85),
-    0 0 0 1px rgba(255,255,255,0.05);
-  transform: translateY(0);
-  transition: box-shadow 0.25s ease, transform 0.25s ease;
-}
-
-/* subtle hover effect (mainly desktop) */
-#cover:hover {
-  transform: translateY(-4px);
-  box-shadow:
-    0 24px 45px rgba(0,0,0,0.9),
-    0 0 0 1px rgba(255,255,255,0.08);
-}
-
-/* Buttons */
-button {
-  margin:4px;
-  padding:8px 12px;
-  font-size:14px;
-  border-radius:999px;
-  border:none;
-  cursor:pointer;
-}
-button:hover { opacity:0.9; }
-.btn-primary { background: var(--accent); color: var(--accentText); }
-.btn-secondary { background:#424242; color:#fff; }
-
-.mode-toggle {
-  margin-top:6px;
-  margin-bottom:6px;
-  display:flex;
-  justify-content:center;
-  flex-wrap:wrap;
-}
-.btn-toggle {
-  margin:4px;
-  background:#424242;
-  color:#fff;
-  padding:6px 14px;
-  font-size:13px;
-}
-.btn-toggle.active {
-  background: var(--accent);
-  color: var(--accentText);
-  border: 1px solid #00ff88;                 /* Rand explizit als Border */
-  box-shadow: 0 0 18px rgba(0, 255, 136, 0.4);  /* nur weicher Glow */
-}
-
-/* Presets */
-.preset-container {
-  margin-top:8px;
-  margin-bottom:8px;
-  display:flex;
-  flex-wrap:wrap;
-  gap:6px;
-  justify-content:center;
-}
-.preset-button {
-  background:#333;
-  color:#eee;
-  border-radius:999px;
-  padding:6px 12px;
-  font-size:12px;
-  border:1px solid #555;
-  cursor:pointer;
-}
-.preset-button.active {
-  background: var(--accent);
-  color: var(--accentText);
-  border: 1px solid #00ff88;                 /* Rand explizit als Border */
-  box-shadow: 0 0 18px rgba(0, 255, 136, 0.4);  /* nur weicher Glow */
-}
-/* Info */
-.info {
-  margin-top:10px;
-  font-size: 0.9rem;
-}
-.info-row {
-  display:flex;
-  justify-content:space-between;
-  gap:10px;
-}
-.info-row + .info-row {
-  margin-top:3px;
-}
-.label { color:#aaa; }
-.value { color:#fff; font-weight:bold; }
-
-/* Category tags */
-.tag {
-  display: inline-block;
-  padding: 2px 8px;
-  border-radius: 999px;
-  font-size: 0.78rem;
-  background: #333;
-  color: #fff;
-  white-space: nowrap;
-}
-
-/* green: calm / slow / dark / high similarity */
-.tag-low {
-  background: #1b5e20;
-  color: #ffffff;
-}
-
-/* accent: normal / neutral / mid similarity */
-.tag-mid {
-  background: var(--accent);
-  color: var(--accentText);
-}
-
-/* red-ish: fast / powerful / bright / low similarity */
-.tag-high {
-  background: #b71c1c;
-  color: #ffffff;
-}
-
-/* Progress bar */
-.bar {
-  width:100%;
-  height:8px;
-  background:#333;
-  margin-top:8px;
-  border-radius:4px;
-  overflow:hidden;
-}
-.bar-inner { height:100%; background: var(--accent); width:0%; }
-.small { font-size: 0.85em; color:#aaa; margin-top:2px; }
-
-/* Audio player */
-#audioPlayer {
-  width:100%;
-  margin-top:4px;
-  display:none; /* visible only in remote mode */
-}
-
-/* Footer */
-footer {
-  position: relative;
-  z-index:1;
-  flex: 0 0 auto;
-  background: rgba(0,0,0,0.75);
-  color:#ddd;
-  font-size: 0.8rem;
-  text-align:center;
-  padding:6px 10px;
-}
-
-/* Mobile touch optimization */
-@media (max-width: 480px) {
-  .track-title {
-    font-size: 1.2rem;
-  }
-  button {
-    font-size:13px;
-    padding:7px 10px;
-  }
-}
-</style>
-</head>
-<body>
-<div id="bg">
-  <div id="content">
-    <div id="inner">
-      <h2 id="titleTop" class="track-title">-</h2>
-
-      <img id="cover" src="" alt="Cover">
-
-      <div class="mode-toggle">
-        <button id="btnLocal" class="btn-toggle active" onclick="setMode('local')">Local (VLC)</button>
-        <button id="btnRemote" class="btn-toggle" onclick="setMode('remote')">Remote (browser)</button>
-      </div>
-
-      <!-- <audio id="audioPlayer" controls></audio> -->
-	  <audio id="audioPlayer"></audio>
-
-      <div id="presets" class="preset-container"></div>
-
-      <div class="info">
-        <div class="info-row">
-          <span class="label">Cluster:</span>
-          <span class="value" id="cluster">-</span>
-        </div>
-        <div class="info-row">
-          <span class="label">Tempo:</span>
-          <span class="value">
-            <span id="tempo_tag" class="tag">-</span>
-          </span>
-        </div>
-        <div class="info-row">
-          <span class="label">Energy:</span>
-          <span class="value">
-            <span id="energy_tag" class="tag">-</span>
-          </span>
-        </div>
-        <div class="info-row">
-          <span class="label">Brightness:</span>
-          <span class="value">
-            <span id="bright_tag" class="tag">-</span>
-          </span>
-        </div>
-        <div class="info-row">
-          <span class="label">Similarity:</span>
-          <span class="value">
-            <span id="similarity_tag" class="tag">-</span>
-          </span>
-        </div>
-      </div>
-
-      <div class="bar"><div class="bar-inner" id="progress"></div></div>
-      <div class="small"><span id="timepos">0:00 / 0:00</span></div>
-
-      <div style="margin-top:12px; text-align:center;">
-        <button class="btn-primary" onclick="sendCommand('start')">▶️ Start / restart</button>
-        <button class="btn-primary" onclick="sendCommand('next')">⏭️ Next track</button>
-        <button class="btn-secondary" onclick="sendCommand('big_jump')">⏩ Big jump</button>
-        <button class="btn-secondary" onclick="sendCommand('pause')">⏯️ Pause / resume</button>
-        <button class="btn-secondary" onclick="sendCommand('stop')">⏹️ Stop</button>
-      </div>
-    </div>
-  </div>
-
-  <footer>
-    Smart Music Player V0.9 (Raspberry Pi / PC)
-  </footer>
-</div>
-
-<script>
-let lastCoverIdx = null;
-let playbackMode = 'local';
-let lastSongIdx = null;
-let presets = [];
-let activePresetId = null;
-
-function updateModeUI() {
-  const btnLocal = document.getElementById('btnLocal');
-  const btnRemote = document.getElementById('btnRemote');
-  const audio = document.getElementById('audioPlayer');
-
-  if (playbackMode === 'remote') {
-    btnRemote.classList.add('active');
-    btnLocal.classList.remove('active');
-    audio.style.display = 'block';
-  } else {
-    btnLocal.classList.add('active');
-    btnRemote.classList.remove('active');
-    audio.style.display = 'none';
-  }
-}
-
-function renderPresets() {
-  const container = document.getElementById('presets');
-  container.innerHTML = '';
-  if (!presets || presets.length === 0) {
-    const span = document.createElement('span');
-    span.textContent = 'No presets loaded.';
-    span.style.color = '#777';
-    container.appendChild(span);
-    return;
-  }
-  presets.forEach(p => {
-    const btn = document.createElement('button');
-    btn.className = 'preset-button';
-    btn.textContent = p.name;
-    btn.onclick = () => selectPreset(p.id);
-    if (activePresetId === p.id) {
-      btn.classList.add('active');
-    }
-    container.appendChild(btn);
-  });
-}
-
-async function loadPresets() {
-  try {
-    const resp = await fetch('/api/presets');
-    const data = await resp.json();
-    presets = data.presets || [];
-    activePresetId = data.active_id || null;
-    renderPresets();
-  } catch (e) {
-    console.error(e);
-  }
-}
-
-async function selectPreset(id) {
-  try {
-    const resp = await fetch('/api/preset', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({id})
-    });
-    const data = await resp.json();
-    activePresetId = data.active_id;
-    presets = data.presets || presets;
-    renderPresets();
-    setTimeout(fetchStatus, 300);
-  } catch (e) {
-    console.error(e);
-  }
-}
-
-async function setMode(mode) {
-  playbackMode = mode;
-  updateModeUI();
-  try {
-    await fetch('/api/mode', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({mode})
-    });
-  } catch (e) {
-    console.error(e);
-  }
-}
-
-// Helper: file name -> "pretty" title
-function prettyTitle(filename) {
-  if (!filename) return "-";
-  let name = filename;
-
-  // strip extension (.mp3 / .MP3)
-  if (name.toLowerCase().endsWith('.mp3')) {
-    name = name.slice(0, -4);
-  }
-
-  // strip leading track numbers like "01 - ", "02_", "03." etc.
-  name = name.replace(/^\\s*\\d+\\s*[-._]\\s*/, '');
-
-  return name;
-}
-
-// apply theme color
-function applyThemeColor(hex) {
-  if (!hex) return;
-  const m = /^#?([0-9a-fA-F]{6})$/.exec(hex);
-  if (!m) return;
-  const intVal = parseInt(m[1], 16);
-  const r = (intVal >> 16) & 255;
-  const g = (intVal >> 8) & 255;
-  const b = intVal & 255;
-  const lum = (0.2126*r + 0.7152*g + 0.0722*b) / 255;
-  const text = lum < 0.4 ? '#ffffff' : '#000000';
-  document.documentElement.style.setProperty('--accent', '#' + m[1]);
-  document.documentElement.style.setProperty('--accentText', text);
-}
-
-// tag helpers
-function setTag(el, text, title, levelClass) {
-  if (!el) return;
-  el.textContent = text || "-";
-  el.title = title || "";
-  el.className = "tag" + (levelClass ? " " + levelClass : "");
-}
-
-/**
- * kind: "tempo" | "energy" | "bright" | "similarity"
- */
-function getTagLevelClass(kind, cat, numeric) {
-  const c = (cat || "").toLowerCase();
-
-  if (kind === "tempo") {
-    if (c === "slow") return "tag-low";
-    if (c === "fast") return "tag-high";
-    return "tag-mid"; // medium/others
-  }
-
-  if (kind === "energy") {
-    if (c === "calm") return "tag-low";
-    if (c === "powerful") return "tag-high";
-    return "tag-mid"; // normal
-  }
-
-  if (kind === "bright") {
-    if (c === "dark") return "tag-low";
-    if (c === "bright") return "tag-high";
-    return "tag-mid"; // neutral
-  }
-
-  if (kind === "similarity") {
-    const p = typeof numeric === "number" ? numeric : 0;
-    if (p >= 38) return "tag-low";   // very similar -> green
-    if (p >= 20) return "tag-mid";   // medium -> accent
-    return "tag-high";               // low similarity -> red
-  }
-
-  return "";
-}
-
-async function fetchStatus() {
-  try {
-    const resp = await fetch('/api/status');
-    const data = await resp.json();
-
-    if (data.mode && data.mode !== playbackMode) {
-      playbackMode = data.mode;
-      updateModeUI();
-    }
-
-    if ('active_preset_id' in data) {
-      activePresetId = data.active_preset_id;
-      renderPresets();
-    }
-
-    if (data.theme_color) {
-      applyThemeColor(data.theme_color);
-    }
-
-    // reset state if nothing playing
-    if (data.current_idx === null || data.current_idx === undefined) {
-      document.getElementById('titleTop').textContent = "-";
-      document.getElementById('cluster').textContent = "-";
-
-      ['tempo_tag', 'energy_tag', 'bright_tag', 'similarity_tag'].forEach(id => {
-        const el = document.getElementById(id);
-        if (el) {
-          el.textContent = "-";
-          el.title = "";
-          el.className = "tag";
-        }
-      });
-
-      document.getElementById('cover').src = "";
-      document.getElementById('bg').style.backgroundImage = "none";
-      lastCoverIdx = null;
-      lastSongIdx = null;
-      document.getElementById('progress').style.width = "0%";
-      document.getElementById('timepos').textContent = "0:00 / 0:00";
-      return;
-    }
-
-    // title
-    const niceName = prettyTitle(data.current_file || "");
-    document.getElementById('titleTop').textContent = niceName || "-";
-
-    document.getElementById('cluster').textContent =
-      data.cluster_id !== null ? data.cluster_id : "-";
-
-    // Tempo tag
-    const tempoTagEl = document.getElementById('tempo_tag');
-    if (data.tempo !== null && data.tempo !== undefined) {
-      const cls = getTagLevelClass('tempo', data.tempo_cat);
-      const title = data.tempo.toFixed(1) + " BPM";
-      const text = data.tempo_cat || 'n/a';
-      setTag(tempoTagEl, text, title, cls);
-    } else {
-      setTag(tempoTagEl, '-', '', '');
-    }
-
-    // Energy tag (RMS)
-    const energyTagEl = document.getElementById('energy_tag');
-    if (data.rms !== null && data.rms !== undefined) {
-      const cls = getTagLevelClass('energy', data.energy_cat);
-      const title = data.rms.toFixed(4);
-      const text = data.energy_cat || 'n/a';
-      setTag(energyTagEl, text, title, cls);
-    } else {
-      setTag(energyTagEl, '-', '', '');
-    }
-
-    // Brightness tag
-    const brightTagEl = document.getElementById('bright_tag');
-    if (data.bright !== null && data.bright !== undefined) {
-      const cls = getTagLevelClass('bright', data.bright_cat);
-      const title = data.bright.toFixed(1);
-      const text = data.bright_cat || 'n/a';
-      setTag(brightTagEl, text, title, cls);
-    } else {
-      setTag(brightTagEl, '-', '', '');
-    }
-
-    // Similarity tag
-    const simTagEl = document.getElementById('similarity_tag');
-    if (data.similarity_percent !== null && data.similarity_percent !== undefined) {
-      const pct = data.similarity_percent;
-      const dist = data.similarity_dist;
-      const cls = getTagLevelClass('similarity', null, pct);
-      const text = pct.toFixed(1) + "%";
-      const title = "Similarity " + pct.toFixed(1) + "% (distance " + dist.toFixed(3) + ")";
-      setTag(simTagEl, text, title, cls);
-    } else {
-      setTag(simTagEl, 'n/a', '', '');
-    }
-
-    if (data.current_idx !== null && data.current_idx !== undefined) {
-      if (data.current_idx !== lastCoverIdx) {
-        const coverUrl = "/api/cover/" + data.current_idx + "?t=" + Date.now();
-        document.getElementById('cover').src = coverUrl;
-        document.getElementById('bg').style.backgroundImage =
-          "url('" + coverUrl + "')";
-        lastCoverIdx = data.current_idx;
-      }
-    }
-
-    const progressEl = document.getElementById('progress');
-    const timeEl = document.getElementById('timepos');
-    const audio = document.getElementById('audioPlayer');
-
-    if (playbackMode === 'remote') {
-      if (data.current_idx !== null &&
-          data.current_idx !== undefined &&
-          data.current_idx !== lastSongIdx) {
-
-        const streamUrl =
-          "/api/stream/" + data.current_idx + "?t=" + Date.now();
-        audio.src = streamUrl;
-        audio.dataset.currentIdx = data.current_idx;
-        lastSongIdx = data.current_idx;
-        if (data.playing) {
-          audio.play().catch(e => console.error(e));
-        }
-      }
-
-      if (!isNaN(audio.duration) && audio.duration > 0) {
-        const pct = Math.max(
-          0,
-          Math.min(100, (audio.currentTime / audio.duration) * 100)
-        );
-        progressEl.style.width = pct + "%";
-        timeEl.textContent =
-          formatTime(audio.currentTime) + " / " + formatTime(audio.duration);
-      } else {
-        progressEl.style.width = "0%";
-        timeEl.textContent = "0:00 / 0:00";
-      }
-    } else {
-      if (data.length && data.position !== null && data.position !== undefined) {
-        const pct = Math.max(
-          0,
-          Math.min(100, (data.position / data.length) * 100)
-        );
-        progressEl.style.width = pct + "%";
-        timeEl.textContent =
-          formatTime(data.position) + " / " + formatTime(data.length);
-      } else {
-        progressEl.style.width = "0%";
-        timeEl.textContent = "0:00 / 0:00";
-      }
-    }
-  } catch (e) {
-    console.error(e);
-  }
-}
-
-function formatTime(sec) {
-  sec = Math.floor(sec || 0);
-  const m = Math.floor(sec / 60);
-  const s = sec % 60;
-  return m + ":" + (s < 10 ? "0" + s : s);
-}
-
-async function sendCommand(action) {
-  const audio = document.getElementById('audioPlayer');
-
-  if (playbackMode === 'remote' && action === 'pause') {
-    if (audio.paused) {
-      audio.play().catch(e => console.error(e));
-    } else {
-      audio.pause();
-    }
-    return;
-  }
-
-  if (playbackMode === 'remote' && action === 'stop') {
-    audio.pause();
-    audio.currentTime = 0;
-  }
-
-  try {
-    await fetch('/api/command', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({action})
-    });
-    setTimeout(fetchStatus, 300);
-  } catch (e) {
-    console.error(e);
-  }
-}
-
-async function onAudioEnded() {
-  if (playbackMode !== 'remote') return;
-  try {
-    const resp = await fetch('/api/remote_ended', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'}
-    });
-    const data = await resp.json();
-    if (data.idx !== null && data.idx !== undefined) {
-      const audio = document.getElementById('audioPlayer');
-      const streamUrl =
-        "/api/stream/" + data.idx + "?t=" + Date.now();
-      audio.src = streamUrl;
-      audio.dataset.currentIdx = data.idx;
-      lastSongIdx = data.idx;
-      audio.play().catch(e => console.error(e));
-    }
-  } catch (e) {
-    console.error(e);
-  }
-}
-
-window.addEventListener('load', () => {
-  const audio = document.getElementById('audioPlayer');
-  audio.addEventListener('ended', onAudioEnded);
-  updateModeUI();
-  loadPresets();
-});
-
-setInterval(fetchStatus, 1000);
-fetchStatus();
-</script>
-</body>
-</html>
-    """
-    return Response(html, mimetype="text/html")
 
 
 @app.route("/api/status")
