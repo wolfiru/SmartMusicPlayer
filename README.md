@@ -171,10 +171,11 @@ Your repository's `/images` folder contains screenshots tested for:
 
 Example:
 
-```md
-![UI](images/Screenshot1.png)
+
+![CLI](images/Screenshot1.png)
+![HTML-UI](images/Screenshot2.png)
 ![3D Map](images/Screenshot3.png)
-```
+![3D Map](images/Screenshot4.png)
 
 ---
 
