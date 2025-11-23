@@ -169,7 +169,7 @@ Your repository's `/images` folder contains screenshots tested for:
 - Web player  
 - Android app  
 
-Example (optional to include inside README):
+Example:
 
 ```md
 ![UI](images/Screenshot1.png)
