@@ -194,6 +194,7 @@ pip install -r requirements.txt
 
 ### 3. Analyze your music library
 ```bash
+Edit the config.json for your needs.
 python3 analyze_and_cluster.py
 ```
 
@@ -243,5 +244,3 @@ Feel free to use, modify, extend, and share.
 ## 🙌 Credits
 Developed by **Wolfgang Ruthner (AT)**  
 2025 – Present
-
-A project combining engineering, music analysis, visualization, and creativity.
