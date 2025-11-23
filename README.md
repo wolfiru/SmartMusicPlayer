@@ -175,7 +175,7 @@ Example:
 ![CLI](images/Screenshot1.png)
 ![HTML-UI](images/Screenshot2.png)
 ![3D Map](images/Screenshot3.png)
-![3D Map](images/Screenshot5.png)
+![3D Map Zomm with Path](images/Screenshot5.png)
 
 ---
 
