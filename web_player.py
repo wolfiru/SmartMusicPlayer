@@ -6,7 +6,7 @@ from io import BytesIO
 
 import numpy as np
 import pandas as pd
-from flask import Flask, jsonify, request, send_file, Response, abort, render_template
+from flask import Flask, jsonify, request, send_file, abort, render_template
 
 # VLC
 try:
@@ -31,27 +31,121 @@ try:
 except ImportError:
     HAVE_PIL = False
 
-# ==== CONFIGURATION ====
-MUSIC_DIR = r"/mnt/musik/Favoriten (Spotify)"  # fixed path
-CSV_PATH = os.path.join(MUSIC_DIR, "song_features_with_clusters.csv")
+# ==== BASE DIR & CONFIG =====================
 
-# Default-Output:
-#   "Streaming"  -> Browser (remote)
-#   "Local"      -> VLC on Server
-DEFAULT_OUTPUT = "Streaming"
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+CONFIG_PATH = os.path.join(BASE_DIR, "config.json")
+
+
+def load_config():
+    cfg = {
+        "MUSIC_DIR": r"/mnt/musik/Favoriten (Spotify)",
+        "DEFAULT_OUTPUT": "Streaming",
+        "CSV_PATH": "song_features_with_clusters.csv",
+        "PORT": 5000,
+        "SECRET_ENABLE": False,
+        "SECRET_VALUE": None,
+    }
+
+    libs_raw = None
+    file_cfg = {}
+
+    try:
+        with open(CONFIG_PATH, "r", encoding="utf-8") as f:
+            file_cfg = json.load(f)
+
+        # klassische Top-Level-Keys übernehmen
+        for key in ("MUSIC_DIR", "DEFAULT_OUTPUT", "CSV_PATH", "PORT", "SECRET_ENABLE", "SECRET_VALUE"):
+            if key in file_cfg:
+                cfg[key] = file_cfg[key]
+
+        libs_raw = file_cfg.get("LIBRARIES")
+        print(f"[INFO] config.json geladen aus {CONFIG_PATH}")
+    except FileNotFoundError:
+        print(f"[WARN] config.json nicht gefunden, verwende Defaults.")
+    except Exception as e:
+        print(f"[ERROR] Konnte config.json nicht laden ({e}), verwende Defaults.")
+
+    # Grundbereinigung
+    cfg["MUSIC_DIR"] = os.path.abspath(cfg["MUSIC_DIR"])
+
+    # Bibliotheken aufbauen
+    libs = []
+    if isinstance(libs_raw, list) and libs_raw:
+        # Mehrere Bibliotheken aus LIBRARIES
+        for entry in libs_raw:
+            if not isinstance(entry, dict):
+                continue
+            md = entry.get("MUSIC_DIR") or cfg["MUSIC_DIR"]
+            md_abs = os.path.abspath(md)
+
+            csv_raw = entry.get("CSV_PATH") or cfg["CSV_PATH"] or "song_features_with_clusters.csv"
+            if os.path.isabs(csv_raw):
+                csv_path = csv_raw
+            else:
+                csv_path = os.path.join(md_abs, csv_raw)
+
+            libs.append({
+                "music_dir": md_abs,
+                "csv_path": csv_path,
+            })
+    else:
+        # Fallback: eine Bibliothek aus den Top-Level-Werten
+        md_abs = cfg["MUSIC_DIR"]
+        csv_raw = cfg.get("CSV_PATH") or "song_features_with_clusters.csv"
+        if os.path.isabs(csv_raw):
+            csv_path = csv_raw
+        else:
+            csv_path = os.path.join(md_abs, csv_raw)
+
+        libs.append({
+            "music_dir": md_abs,
+            "csv_path": csv_path,
+        })
+
+    cfg["LIBRARIES"] = libs
+
+    # Port als int
+    try:
+        cfg["PORT"] = int(cfg.get("PORT", 5000))
+    except (TypeError, ValueError):
+        print("[WARN] Ungültiger PORT in config.json, verwende 5000.")
+        cfg["PORT"] = 5000
+
+    # Secret normalisieren
+    cfg["SECRET_ENABLE"] = bool(cfg.get("SECRET_ENABLE", False))
+    secret_val = cfg.get("SECRET_VALUE")
+    cfg["SECRET_VALUE"] = str(secret_val) if secret_val is not None else None
+
+    if cfg["SECRET_ENABLE"] and not cfg["SECRET_VALUE"]:
+        print("[WARN] SECRET_ENABLE=true, aber kein SECRET_VALUE gesetzt. Deaktiviere Secret-Schutz.")
+        cfg["SECRET_ENABLE"] = False
+
+    return cfg
+
+
+CONFIG = load_config()
+
+# für Logging / Abwärtskompatibilität
+MUSIC_DIR = CONFIG["LIBRARIES"][0]["music_dir"]
+CSV_PATH = CONFIG["LIBRARIES"][0]["csv_path"]
+DEFAULT_OUTPUT = CONFIG["DEFAULT_OUTPUT"]
+PORT = CONFIG["PORT"]
+
+SECRET_ENABLE = CONFIG.get("SECRET_ENABLE", False)
+SECRET_VALUE = CONFIG.get("SECRET_VALUE")
 
 # presets.json in the same folder as this script
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 PRESET_PATH = os.path.join(BASE_DIR, "presets.json")
-# =======================
+# ===========================================
 
 
 def tempo_category(bpm):
     if pd.isna(bpm):
         return "unknown"
-    if bpm < 90:
+    if bpm < 80:
         return "slow"
-    elif bpm < 120:
+    elif bpm < 110:
         return "medium"
     else:
         return "fast"
@@ -59,44 +153,63 @@ def tempo_category(bpm):
 
 class WebMusicPlayer:
     """
-    Web-controlled player:
-    - Local: VLC plays on the server
-    - Remote: browser streams api/stream/<idx>
-    - Intelligent next-track selection
-    - Presets (mood / mode) from presets.json
-    - Theme colors from the cover
+    Web-controlled player über mehrere Bibliotheken.
+    Jede Bibliothek:
+    - eigenes MUSIC_DIR
+    - eigene CSV mit Features
+    Alle Tracks landen in einem gemeinsamen DataFrame.
     """
 
-    def __init__(self, music_dir, csv_path):
-        self.music_dir = music_dir
-        self.csv_path = csv_path
+    def __init__(self, libraries):
+        if not libraries:
+            raise ValueError("No libraries configured.")
+        self.libraries = libraries
 
-        if not os.path.exists(csv_path):
-            raise FileNotFoundError(f"CSV not found: {csv_path}")
+        # ----- CSVs aller Bibliotheken einlesen -----
+        frames = []
+        for lib_id, lib in enumerate(libraries):
+            music_dir = lib["music_dir"]
+            csv_path = lib["csv_path"]
 
-        df = pd.read_csv(csv_path)
-        if "cluster_id" not in df.columns:
-            raise ValueError("CSV has no column 'cluster_id'.")
+            if not os.path.exists(csv_path):
+                print(f"[WARN] CSV not found for library {lib_id}: {csv_path}")
+                continue
 
-        df["cluster_id"] = df["cluster_id"].astype(int)
-		
-		# Pfade aus dem CSV bereinigen:
-        # - Windows-Backslashes in normale Separatoren umwandeln
-        # - nur den Dateinamen behalten (M:\Favoriten (Spotify)\... -> CYREES - ...mp3)
-        if "path" not in df.columns:
-            raise ValueError("CSV has no column 'path'.")
+            df_lib = pd.read_csv(csv_path)
 
-        df["path"] = (
-            df["path"]
-            .astype(str)
-            .apply(lambda p: os.path.basename(p.replace("\\", os.sep)))
-        )
+            if "cluster_id" not in df_lib.columns:
+                raise ValueError(f"CSV {csv_path} has no column 'cluster_id'.")
+            if "path" not in df_lib.columns:
+                raise ValueError(f"CSV {csv_path} has no column 'path'.")
 
+            df_lib["cluster_id"] = df_lib["cluster_id"].astype(int)
+
+            # Pfade aus dem CSV bereinigen:
+            # - Windows-Backslashes in normale Separatoren umwandeln
+            # - nur den Dateinamen behalten (M:\Favoriten (Spotify)\... -> CYREES - ...mp3)
+            df_lib["path"] = (
+                df_lib["path"]
+                .astype(str)
+                .apply(lambda p: os.path.basename(p.replace("\\", os.sep)))
+            )
+
+            # merken, aus welcher Bibliothek der Track kommt
+            df_lib["library_id"] = lib_id
+            df_lib["root_dir"] = music_dir
+
+            frames.append(df_lib)
+
+        if not frames:
+            raise RuntimeError("No CSVs could be loaded for any library.")
+
+        df = pd.concat(frames, ignore_index=True)
+
+        # ----- kategorische Felder -----
         df["tempo_cat"] = df.get("tempo", pd.Series([None] * len(df))).apply(
             tempo_category
         )
 
-        # Energy / brightness categories
+        # Energy / brightness categories (global über alle Bibliotheken)
         if "rms_mean" in df.columns:
             q_low, q_high = df["rms_mean"].quantile([0.33, 0.66])
             energy_low, energy_high = q_low, q_high
@@ -195,7 +308,6 @@ class WebMusicPlayer:
         self.prev_idx = None
         self.played = set()
 
-
         # Defaultmode aus Config ableiten
         mode_cfg = (DEFAULT_OUTPUT or "").strip().lower()
         if mode_cfg in ("streaming", "remote", "browser"):
@@ -203,8 +315,8 @@ class WebMusicPlayer:
         else:
             self.playback_mode = "local"
 
+        print(f"[INFO] Loaded {self.n_songs} tracks from {len(libraries)} libraries.")
         print(f"[INFO] Default playback mode: {self.playback_mode}")
-
 
         # Presets
         self.presets = []
@@ -215,6 +327,9 @@ class WebMusicPlayer:
         # Cover + theme colors
         self.cover_cache = {}         # song_idx -> (mime, data)
         self.theme_color_cache = {}   # song_idx -> "#rrggbb"
+
+        # Tracklängen-Cache (Sekunden)
+        self.length_cache = {}        # song_idx -> float
 
         # VLC
         if HAVE_VLC:
@@ -286,10 +401,24 @@ class WebMusicPlayer:
 
     # ---------- Helper ----------
 
-    def _resolve_path(self, path: str) -> str:
-        if not os.path.isabs(path):
-            path = os.path.join(self.music_dir, path)
-        return path
+    def _get_full_path_for_index(self, song_idx: int):
+        """Ermittelt den absoluten Pfad zur MP3-Datei für den gegebenen Index."""
+        try:
+            row = self.df.loc[song_idx]
+        except KeyError:
+            return None
+
+        root_dir = row.get("root_dir", None)
+        rel_path = row.get("path")
+        if rel_path is None:
+            return None
+
+        if root_dir and not os.path.isabs(rel_path):
+            full_path = os.path.join(root_dir, rel_path)
+        else:
+            full_path = rel_path
+
+        return full_path
 
     def set_mode(self, mode: str):
         with self.lock:
@@ -357,7 +486,6 @@ class WebMusicPlayer:
         probs = inv / inv.sum() if inv.sum() > 0 else np.ones_like(inv) / len(inv)
         rel_choice = np.random.choice(len(cand), p=probs)
         return int(sorted_idx[cand[rel_choice]])
-
 
     def _choose_next_index_preset(self):
         """
@@ -438,7 +566,7 @@ class WebMusicPlayer:
     def next_song(self, big_jump=False):
         """
         Local: start VLC
-        Remote: only set index, browser streams
+        Remote: only set index, browser/Android streams
         - If preset active: preset-based selection
         - Otherwise: generic similarity logic
         """
@@ -461,10 +589,10 @@ class WebMusicPlayer:
 
                 row = self.df.loc[idx]
                 path = row["path"]
-                full_path = self._resolve_path(path)
+                full_path = self._get_full_path_for_index(idx)
 
-                if not os.path.exists(full_path):
-                    print(f"[WARN] File not found: {full_path}")
+                if not full_path or not os.path.exists(full_path):
+                    print(f"[WARN] File not found: {full_path} (row path={path})")
                     self.played.add(idx)
                     attempts += 1
                     continue
@@ -496,6 +624,54 @@ class WebMusicPlayer:
             print("[ERROR] No playable tracks found.")
         self.current_idx = None
         return None
+		
+    def play_by_path(self, path: str):
+        """
+        Spielt (oder wählt) einen Track anhand des Dateinamens, so wie in self.df['path'] gespeichert.
+
+        - path: Dateiname oder Pfad; es wird nur der basename verwendet.
+        - Rückgabe: Index des Tracks oder None, wenn nichts gefunden/spielbar.
+        """
+        if not path:
+            return None
+
+        # nur den Dateinamen vergleichen, genauso wie wir die CSV-Pfade bereinigt haben
+        basename = os.path.basename(path)
+
+        # Kandidaten im DataFrame suchen
+        candidates = self.df.index[self.df["path"] == basename].tolist()
+        if not candidates:
+            print(f"[WARN] play_by_path: kein Track mit basename={basename!r} gefunden")
+            return None
+
+        idx = int(candidates[0])  # falls doppelte Namen existieren: nimm den ersten
+
+        with self.lock:
+            full_path = self._get_full_path_for_index(idx)
+            if not full_path or not os.path.exists(full_path):
+                print(f"[WARN] play_by_path: Datei nicht gefunden: {full_path}")
+                return None
+
+            if self.playback_mode == "local":
+                # wie in next_song: VLC starten
+                ok = self._start_vlc(full_path)
+                if not ok:
+                    print(f"[WARN] play_by_path: VLC konnte {full_path} nicht starten")
+                    return None
+                play_msg = "(local) Playing from map"
+            else:
+                # remote: Browser/Android holt sich den Stream über /api/stream/<idx>
+                play_msg = "(remote) Selected from map"
+
+            self.prev_idx = self.current_idx
+            self.current_idx = idx
+            self.played.add(idx)
+            self.last_vlc_state = None
+
+            print(f"[INFO] {play_msg}: idx={idx}, file={basename}")
+
+        return idx
+		
 
     # ---------- VLC ----------
 
@@ -522,7 +698,7 @@ class WebMusicPlayer:
             if self.playback_mode == "local":
                 if HAVE_VLC and self.vlc_player is not None:
                     self.vlc_player.pause()
-            # remote: pause handled in the browser
+            # remote: pause handled in the browser/Android
 
     def stop(self):
         with self.lock:
@@ -662,8 +838,24 @@ class WebMusicPlayer:
                         pass
                 playing = state not in ("State.Stopped", "State.Ended")
             else:
-                # remote: browser plays, server only knows "should be running"
+                # remote: browser/Android spielt, Server weiß nur "sollte laufen"
                 playing = True
+
+            # Tracklänge per mutagen ermitteln (für remote und als Fallback)
+            if length is None and HAVE_MUTAGEN and self.current_idx is not None:
+                cached = self.length_cache.get(self.current_idx)
+                if cached is not None:
+                    length = cached
+                else:
+                    full_path = self.get_song_path(self.current_idx)
+                    if full_path:
+                        try:
+                            audio = MP3(full_path)
+                            length_val = float(audio.info.length)  # Sekunden
+                            length = length_val
+                            self.length_cache[self.current_idx] = length_val
+                        except Exception:
+                            pass
 
             theme_color = self.theme_color_cache.get(self.current_idx)
 
@@ -699,15 +891,8 @@ class WebMusicPlayer:
                 mime, data = self.cover_cache[song_idx]
                 return mime, data
 
-        try:
-            row = self.df.loc[song_idx]
-        except KeyError:
-            return None, None
-
-        path = row["path"]
-        full_path = self._resolve_path(path)
-
-        if not os.path.exists(full_path):
+        full_path = self._get_full_path_for_index(song_idx)
+        if not full_path or not os.path.exists(full_path):
             return None, None
 
         # 1) embedded cover
@@ -754,28 +939,39 @@ class WebMusicPlayer:
     # ---------- Stream ----------
 
     def get_song_path(self, song_idx):
-        try:
-            row = self.df.loc[song_idx]
-        except KeyError:
-            return None
-        path = row["path"]
-        full_path = self._resolve_path(path)
-        if not os.path.exists(full_path):
+        full_path = self._get_full_path_for_index(song_idx)
+        if not full_path or not os.path.exists(full_path):
             return None
         return full_path
+
+
+# ================== Secret-Helper =======================
+
+
+def secret_ok(data: dict) -> bool:
+    if not SECRET_ENABLE:
+        return True
+
+    secret = None
+    if isinstance(data, dict):
+        secret = data.get("secret")
+
+    if not secret:
+        # Versuch aus der URL: /api/command?secret=Geheim
+        secret = request.args.get("secret")
+
+    return secret == SECRET_VALUE
 
 
 # ================== Flask app =======================
 
 app = Flask(__name__)
-player = WebMusicPlayer(MUSIC_DIR, CSV_PATH)
+player = WebMusicPlayer(CONFIG["LIBRARIES"])
 
 
 @app.route("/")
 def index():
     return render_template("player.html")
-
-
 
 
 @app.route("/api/status")
@@ -786,6 +982,10 @@ def api_status():
 @app.route("/api/command", methods=["POST"])
 def api_command():
     data = request.get_json(force=True) or {}
+
+    if not secret_ok(data):
+        return jsonify({"ok": False, "error": "invalid_secret"}), 403
+
     action = data.get("action")
 
     if action == "start":
@@ -830,7 +1030,12 @@ def api_stream(song_idx):
 def api_mode():
     if request.method == "GET":
         return jsonify({"mode": player.playback_mode})
+
     data = request.get_json(force=True) or {}
+
+    if not secret_ok(data):
+        return jsonify({"ok": False, "error": "invalid_secret"}), 403
+
     mode = data.get("mode")
     player.set_mode(mode)
     return jsonify({"ok": True, "mode": player.playback_mode})
@@ -847,6 +1052,10 @@ def api_presets():
 @app.route("/api/preset", methods=["POST"])
 def api_preset():
     data = request.get_json(force=True) or {}
+
+    if not secret_ok(data):
+        return jsonify({"ok": False, "error": "invalid_secret"}), 403
+
     preset_id = data.get("id")
     idx, _played = player.activate_preset_and_play(preset_id)
     return jsonify({
@@ -859,10 +1068,53 @@ def api_preset():
 
 @app.route("/api/remote_ended", methods=["POST"])
 def api_remote_ended():
+    # hier KEIN force=True
+    data = request.get_json(silent=True) or {}
+
+    if not secret_ok(data):
+        return jsonify({"ok": False, "error": "invalid_secret"}), 403
+
     idx = player.next_song(big_jump=False)
     status = player.get_status()
     return jsonify({"ok": True, "idx": idx, "status": status})
 
 
+
+@app.route("/api/play_from_map", methods=["POST"])
+def api_play_from_map():
+    data = request.get_json(force=True) or {}
+
+    if not secret_ok(data):
+        return jsonify({"ok": False, "error": "invalid_secret"}), 403
+
+    path = data.get("path")
+    if not path:
+        return jsonify({"ok": False, "error": "missing_path"}), 400
+
+    idx = player.play_by_path(path)
+    if idx is None:
+        return jsonify({"ok": False, "error": "track_not_found_or_unplayable"}), 404
+
+    status = player.get_status()
+    return jsonify({"ok": True, "idx": idx, "status": status})
+	
+@app.route("/3dview")
+def three_d_view():
+    """
+    Liefert die 3D-Ansicht aus dem out-Verzeichnis.
+    Aufruf (von außen): https://www.ruthner.at/smp/3dview
+    """
+    html_path = os.path.join(BASE_DIR, "out", "music_3d_scatter.html")
+    if not os.path.exists(html_path):
+        return (
+            "<h1>3D-View noch nicht erzeugt</h1>"
+            "<p>Bitte zuerst music_3d_plot.py laufen lassen.</p>",
+            404,
+        )
+    return send_file(html_path, mimetype="text/html")
+	
+
+
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000, debug=False)
+    print(f"[INFO] Starte Web-Server auf Port {PORT}, Bibliotheken={len(CONFIG['LIBRARIES'])}, SECRET_ENABLE={SECRET_ENABLE}")
+    app.run(host="0.0.0.0", port=PORT, debug=False)
