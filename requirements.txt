@@ -1,0 +1,12 @@
+Flask
+librosa
+numpy
+pandas
+scikit-learn
+plotly
+python-vlc
+Pillow
+mutagen
+soundfile
+audioread
+rich
