@@ -160,7 +160,7 @@ Tech stack:
 
 ## 📸 Screenshots
 
-Your repository's `/images` folder contains screenshots tested for:
+
 
 - Desktop  
 - Mobile  
